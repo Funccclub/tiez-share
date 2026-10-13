@@ -55,7 +55,7 @@ fn choose_interface(routes: &str, interfaces: &[String]) -> Option<String> {
     default.or_else(|| if interfaces.len() == 1 { Some(interfaces[0].clone()) } else { None })
 }
 fn eligible_name(name: &str) -> bool {
-    name != "lo" && name != "docker0" && !["br-", "veth", "tun", "tap", "wg", "tailscale", "zt"].iter().any(|prefix| name.starts_with(prefix))
+    name == "br-lan" || (name != "lo" && name != "docker0" && !["br-", "veth", "tun", "tap", "wg", "tailscale", "zt"].iter().any(|prefix| name.starts_with(prefix)))
 }
 fn discover_from(routes: &str, inet6: &str, active: &[String], preferred: Option<&str>) -> Vec<Network> {
     let mut candidates = Vec::new();
