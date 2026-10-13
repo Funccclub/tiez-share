@@ -1,0 +1,65 @@
+# TieZ Share - 局域网文件中转 / 聊天室
+#
+# iStoreOS 用法：
+#   1. 先挂载 U 盘/硬盘，确认路径（下面假设挂到了 /mnt/sda1）
+#   2. mkdir -p /mnt/sda1/tiez-share
+#   3. 把这个文件放到路由器上，例如 /root/tiez-share/docker-compose.yml
+#   4. cd /root/tiez-share && docker compose up -d
+#
+# 镜像默认从 Docker Hub 拉（多架构清单，ARM 路由器和 x86 电脑都适用）。
+# 想用本地构建的镜像，把 image 换成 tiez-share:arm64 / tiez-share:amd64，
+# 或者改用下面注释里的 build 段在路由器上直接编译。
+
+services:
+  tiez-share:
+    image: 14854/tiez-share:0.1.0
+    # 想直接在路由器上编译镜像就改用下面两行（第一次会比较慢）：
+    # build:
+    #   context: .
+    container_name: tiez-share
+    restart: unless-stopped
+
+    ports:
+      # 左边是路由器上对外暴露的端口，冲突就改成别的（例如 18080:12345）
+      - "12345:12345"
+
+    environment:
+      TIEZ_PORT: "12345"
+      TIEZ_DATA_DIR: "/data"
+      # 界面标题（会显示在所有设备的页面上）
+      TIEZ_TITLE: "家庭局域网中转"
+      # sticky-note | paper | mica | acrylic
+      TIEZ_THEME: "mica"
+      # system | light | dark
+      TIEZ_COLOR_MODE: "system"
+      # 保留多少条聊天记录（每条都写盘，路由器 flash 小就别开太大）
+      TIEZ_MAX_HISTORY: "1000"
+      # 有人连接/断开时在聊天室里提示一下
+      TIEZ_JOIN_NOTICE: "1"
+
+    volumes:
+      # 一定要挂到外置盘：/data 里会堆积所有中转文件，
+      # 写到 overlay 上有把路由器系统分区写满的风险。
+      #
+      # 另外别把「和别人共用的目录」直接挂进来：页面左侧的文件区会列出这个目录
+      # 下的所有文件，并且允许删除其中任何一个。留一层子目录才安全，
+      # 比如 /mnt/sda/disk/others/tiez 而不是 /mnt/sda/disk/others。
+      - /mnt/sda1/tiez-share:/data
+
+    labels:
+      # 镜像在 Docker Hub 上，watchtower 拉得动；这里还是关掉，免得它擅自升级。
+      # 想让它自动更新就删掉这一行，并把上面的 image 换成 :latest。
+      com.centurylinklabs.watchtower.enable: "false"
+
+    # 路由器性能弱，本想限一下内存，但 iStoreOS 内核没开 cgroup 内存限制，
+    # 写了会被丢弃并打印 "Limitation discarded" 警告。普通 Docker 上可以打开：
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 256M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

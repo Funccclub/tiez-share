@@ -1,0 +1,17 @@
+# Rust
+/target/
+Cargo.lock.bak
+
+# 构建产物
+*.tar
+*.tar.gz
+
+# 本地测试数据
+/data/
+
+# Local binaries, credentials and backups
+/tiez-share-aarch64
+.env
+.env.*
+!.env.example
+/sec_backup-*/

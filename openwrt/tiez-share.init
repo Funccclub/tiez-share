@@ -1,0 +1,68 @@
+#!/bin/sh /etc/rc.common
+# TieZ Share - OpenWrt / iStoreOS 原生服务（不走 Docker 的备选方案）
+#
+# 安装步骤：
+#   # 电脑上
+#   scp tiez-share-aarch64 root@<路由IP>:/usr/bin/tiez-share
+#   scp tiez-share.init    root@<路由IP>:/etc/init.d/tiez-share
+#
+#   # 路由器上
+#   chmod +x /usr/bin/tiez-share /etc/init.d/tiez-share
+#   mkdir -p /mnt/sda1/tiez-share
+#   /etc/init.d/tiez-share enable
+#   /etc/init.d/tiez-share start
+#   logread -e tiez-share -f
+#
+# 静态 musl 二进制，不依赖 OpenWrt 的任何库；LAN 区默认允许访问路由器，
+# 不需要额外加防火墙规则。
+
+START=99
+STOP=10
+USE_PROCD=1
+
+# ---- 想改配置就改这里 ----
+PROG=/usr/bin/tiez-share
+DATA_DIR=/mnt/sda1/tiez-share
+PORT=12345
+TITLE="局域网聊天室"
+THEME=mica                 # sticky-note | paper | mica | acrylic
+MAX_HISTORY=1000
+JOIN_NOTICE=1
+# --------------------------
+
+start_service() {
+    if [ ! -x "$PROG" ]; then
+        echo "tiez-share: 找不到可执行文件 $PROG"
+        return 1
+    fi
+
+    mkdir -p "$DATA_DIR" || {
+        echo "tiez-share: 无法创建 $DATA_DIR（挂载盘没挂上？）"
+        return 1
+    }
+
+    procd_open_instance
+    procd_set_param command "$PROG"
+    procd_set_param env \
+        TIEZ_BIND=0.0.0.0 \
+        TIEZ_PORT="$PORT" \
+        TIEZ_DATA_DIR="$DATA_DIR" \
+        TIEZ_TITLE="$TITLE" \
+        TIEZ_THEME="$THEME" \
+        TIEZ_MAX_HISTORY="$MAX_HISTORY" \
+        TIEZ_JOIN_NOTICE="$JOIN_NOTICE"
+    procd_set_param respawn 3600 5 5
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param limits nofile="4096"
+    procd_close_instance
+}
+
+stop_service() {
+    # procd 发送 SIGTERM，程序自己会优雅退出
+    :
+}
+
+service_triggers() {
+    procd_add_reload_trigger "tiez-share"
+}
