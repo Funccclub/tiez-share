@@ -33,7 +33,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `TIEZ_LOGO` to use your own image URL or data URI.
 const DEFAULT_LOGO: &str = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%23487bdb'/%3E%3Cpath%20d='M18%2022h28a4%204%200%200%201%204%204v14a4%204%200%200%201-4%204H32l-10%208v-8h-4a4%204%200%200%201-4-4V26a4%204%200%200%201%204-4z'%20fill='%23ffffff'/%3E%3C/svg%3E";
 
-const THEMES: [&str; 4] = ["sticky-note", "paper", "mica", "acrylic"];
+const THEMES: [&str; 5] = ["sticky-note", "paper", "mica", "acrylic", "liquid-glass"];
 const COLOR_MODES: [&str; 3] = ["system", "light", "dark"];
 
 fn env_str(key: &str, default: &str) -> String {

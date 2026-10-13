@@ -206,7 +206,7 @@ http://<旁路由的LAN地址>:12345
 | `TIEZ_HISTORY_FILE` | `<DATA_DIR>/history.jsonl` | 聊天记录文件 |
 | `TIEZ_MAX_HISTORY` | `1000` | 保留多少条记录（每条写一行盘） |
 | `TIEZ_TITLE` | `局域网聊天室` | 页面标题 |
-| `TIEZ_THEME` | `mica` | `sticky-note` / `paper` / `mica` / `acrylic` |
+| `TIEZ_THEME` | `mica` | `sticky-note` / `paper` / `mica` / `acrylic` / `liquid-glass` |
 | `TIEZ_COLOR_MODE` | `system` | `system` / `light` / `dark` |
 | `TIEZ_LOGO` | 内置 SVG | 头像图标，可填图片 URL 或 data URI |
 | `TIEZ_JOIN_NOTICE` | `0` | 加入/离开提醒，默认关闭；设为 `1` 可启用 |
@@ -218,6 +218,16 @@ http://<旁路由的LAN地址>:12345
 | `TIEZ_FILE_TTL_SECS` | `604800` | 上传文件保留 7 天；`0` 关闭按时间清理 |
 | `TIEZ_UPLOAD_TTL_SECS` | `3600` | 未完成上传和重试记录闲置 1 小时后回收 |
 | `TIEZ_CLEANUP_INTERVAL_SECS` | `60` | 周期清理间隔；上传时也检查容量 |
+
+### 液态玻璃主题
+
+在 Compose 的 `environment` 中将 `TIEZ_THEME` 设为 `"liquid-glass"`，重建容器即可启用。支持 `TIEZ_COLOR_MODE=system/light/dark`；默认主题仍为 `mica`。
+
+新主题提供柔和渐变背景、浮动玻璃顶栏和输入栏、圆角文件面板与清晰的消息气泡。桌面 Chromium 浏览器额外显示轻微边缘折射；Safari、Firefox 与触屏设备使用毛玻璃和高光。只有顶栏和输入栏生成折射贴图，尺寸变化时更新，不在滚动时持续计算。所有 CSS/JS 都内嵌在程序中，无 CDN、外部字体或运行时依赖，可离线使用。
+
+减少动态效果、减少透明度和强制色彩模式会分别降低动画或改用实色表面。浏览器不支持背景模糊时也会使用实色面板。
+
+视觉设计参考 [hwyuanzi/LiquidGlass-UI](https://github.com/hwyuanzi/LiquidGlass-UI) 的材质层次与主题变量，以及 [rdev/liquid-glass-react](https://github.com/rdev/liquid-glass-react) 的边缘高光与折射表现。本项目的 CSS 与 JS 为独立实现，没有引入这两个项目的组件或源码。
 
 ### 上传完整性与重试
 
