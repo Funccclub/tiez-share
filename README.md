@@ -189,7 +189,7 @@ http://<旁路由的LAN地址>:12345
 
 ### 4.6 云编译下载
 
-无需本地构建，可以从 GitHub Actions 下载对应架构的镜像包，导入后按上面的步骤启动，详见第 11 节。
+无需本地构建，可以直接 `docker pull 14854/tiez-share:latest`，同一个标签自动选择 ARM64 或 AMD64。也可从 GitHub Actions 下载镜像包离线导入，详见第 11 节。
 
 ---
 
@@ -347,6 +347,25 @@ logread -e tiez-share -f          # 看启动日志
 
 ## 11. GitHub Actions 云编译（树莓派 / x86）
 
+### 自动发布到 Docker Hub
+
+源码仓库 → GitHub Actions 双架构编译与测试 → Docker Hub `14854/tiez-share`。仅在两个架构全部通过测试后发布；Pull Request 只测试，不使用发布凭据。
+
+```sh
+docker pull 14854/tiez-share:latest
+```
+
+`latest` 和 `sha-<完整提交 SHA>` 都是包含 ARM64/AMD64 的多架构镜像。推送 `v*` 标签时还会生成去掉 `v` 的版本标签。每个架构另有 `sha-<SHA>-arm64` / `sha-<SHA>-amd64` 标签。
+
+首次设置只需在 GitHub 仓库 Settings → Secrets and variables → Actions 添加 `DOCKERHUB_TOKEN`，值为 Docker Hub `14854` 账号的 Read & Write Access Token。密钥不放进源码或 Compose。更换账号/仓库时需同时修改工作流的登录用户名和 `IMAGE`。
+
+### 通过 Dockge 更新
+
+在原 Stack 使用 `image: 14854/tiez-share:latest`，Linux 使用 `network_mode: host`，保留现有数据挂载路径；`TIEZ_LAN_CIDRS` 可明确指定实际家庭网段，例如 `192.168.8.0/24`。首次升级将 `TIEZ_JOIN_NOTICE` 设为 `0`，然后在 Dockge 保存/部署。后续代码发布成功后，在 Dockge 点击该 Stack 的“更新”即可拉取新镜像并重建，数据挂载保持不变。Watchtower 自动更新默认关闭。
+
+### 手动编译与离线下载
+
+
 打开 [Actions](https://github.com/Funccclub/tiez-share/actions/workflows/build-images.yml)，选择 **Run workflow** 即可手动构建。推送代码到 `main` 或创建 `v*` 标签也会自动构建；只修改文档不会触发。
 
 两套镜像分别编译，执行 Rust 网段判断单元测试，启动容器运行 `tests/smoke.mjs` 自检，再用 `tests/retention.mjs` 验证容量淘汰、过期/临时文件清理、重启持久化和手动文件/符号链接保护。ARM64 编译使用交叉工具链，运行自检时使用 QEMU。无需 Docker Hub 账号、密码或额外 Secrets。
@@ -373,7 +392,7 @@ docker run -d --name tiez-share --restart unless-stopped \
   tiez-share:arm64
 ```
 
-使用 Compose 时，默认引用本地已导入的 `tiez-share:arm64`；x86_64 修改 `image` 为 `tiez-share:amd64`。镜像不会自动发布到 Docker Hub 或 GHCR。
+使用 Compose 时，默认引用 Docker Hub 的 `14854/tiez-share:latest`，自动匹配设备架构。使用离线导入的镜像时，将 `image` 改为本地的 `tiez-share:arm64` 或 `tiez-share:amd64`。
 
 独立二进制也可以配合 `openwrt/tiez-share.init` 原生运行：ARM64 下载包中的 `tiez-share-arm64` 即为第 10 节使用的二进制，复制时将它重命名为 `tiez-share`。
 
