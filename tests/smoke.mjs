@@ -377,6 +377,51 @@ const badDel = await fetch(`${BASE}/files/deadbeefdeadbeef`, {
 });
 check("删除未知 token 返回 404", badDel.status === 404, `status=${badDel.status}`);
 
+// ------------------------------------------------------- 消息复制按钮（新增）
+section("[9] 消息复制按钮");
+
+check(
+  "页面含复制按钮样式骨架",
+  html.includes(".copy-btn") && html.includes(".bubble.has-copy"),
+);
+check(
+  "气泡渲染时挂上复制按钮",
+  html.includes("attachCopyButton(bubble, copyTargetOf("),
+);
+check(
+  "复制按钮拦住冒泡，不会误触发文件下载",
+  html.includes("e.stopPropagation()"),
+  "气泡本身 onclick 是下载；不拦住的话点复制会变成下载文件",
+);
+check(
+  "非安全上下文有 execCommand 兜底",
+  html.includes("isSecureContext") && html.includes("execCommand('copy')"),
+  "路由器上是 http://192.168.x.x，不是安全上下文，navigator.clipboard 不存在",
+);
+check(
+  "data:/blob: 不给复制按钮",
+  html.includes("/^(data|blob):/"),
+  "上传中的占位气泡走 blob:，复制出来没法用",
+);
+
+// ------------------------------------------------------- 回车发送（新增）
+section("[10] 回车发送");
+
+check("回车直接发送", html.includes("sendBtn.click()") && html.includes("isEnterToSend"));
+check(
+  "输入法组字时的回车不发送",
+  html.includes("!e.isComposing") && html.includes("keyCode !== 229"),
+  "中文候选词用回车确认；不挡的话每选一次词就发一条空消息",
+);
+check(
+  "Shift+回车保留换行",
+  /e\.shiftKey/.test(html) && /e\.preventDefault\(\)/.test(html),
+);
+check(
+  "全屏编辑器行为一致",
+  html.includes("fs-textarea')") || html.includes("fs-textarea\")"),
+);
+
 // ------------------------------------------------------------------ 清理连接
 B.ws.close();
 await new Promise((r) => setTimeout(r, 300));
