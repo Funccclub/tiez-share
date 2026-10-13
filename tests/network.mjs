@@ -1,13 +1,20 @@
 // Isolated policy integration tests; never uses production files or interfaces.
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { request } from 'node:http';
 const image = process.argv[2];
 if (!image) throw new Error('Usage: node tests/network.mjs IMAGE');
 const name = `tiez-network-${process.pid}`;
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8' });
 const base = 'http://127.0.0.1:12347';
 const headers = ip => ({ 'X-Forwarded-For': ip });
-async function status(path, h = {}) { return (await fetch(base + path, { headers: h })).status; }
+// Raw HTTP preserves the proxy's Host header; fetch may replace forbidden Host.
+function status(path, h = {}) {
+  return new Promise((resolve, reject) => {
+    const req = request(base + path, { headers: h }, res => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject); req.end();
+  });
+}
 try {
   docker('run', '-d', '--name', name, '--network', 'host',
     '-e', 'TIEZ_PORT=12347', '-e', 'TIEZ_BIND=::',
