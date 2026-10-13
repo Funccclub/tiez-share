@@ -73,6 +73,7 @@ jobs:
           test "$ready" = 1
           node tests/smoke.mjs
           node tests/retention.mjs tiez-share:${{ matrix.arch }}
+          node tests/network.mjs tiez-share:${{ matrix.arch }}
       - name: Container logs
         if: always()
         run: docker logs smoke || true

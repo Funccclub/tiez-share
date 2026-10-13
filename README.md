@@ -200,7 +200,7 @@ http://<旁路由的LAN地址>:12345
 | 变量 | 默认值 | 说明 |
 | :--- | :--- | :--- |
 | `TIEZ_PORT` | `12345` | 监听端口 |
-| `TIEZ_BIND` | `0.0.0.0` | 监听地址 |
+| `TIEZ_BIND` | `0.0.0.0` | 监听地址；Linux 推荐 `::` 同时接受 IPv6/IPv4 |
 | `TIEZ_DATA_DIR` | `/data` | 文件与历史的存放目录（**挂到外置盘**） |
 | `TIEZ_HISTORY_FILE` | `<DATA_DIR>/history.jsonl` | 聊天记录文件 |
 | `TIEZ_MAX_HISTORY` | `1000` | 保留多少条记录（每条写一行盘） |
@@ -209,7 +209,9 @@ http://<旁路由的LAN地址>:12345
 | `TIEZ_COLOR_MODE` | `system` | `system` / `light` / `dark` |
 | `TIEZ_LOGO` | 内置 SVG | 头像图标，可填图片 URL 或 data URI |
 | `TIEZ_JOIN_NOTICE` | `0` | 加入/离开提醒，默认关闭；设为 `1` 可启用 |
-| `TIEZ_LAN_CIDRS` | 自动检测 | 允许的直连网段，逗号分隔，例如 `192.168.8.0/24`；回环地址始终允许 |
+| `TIEZ_LAN_CIDRS` | 自动检测 | 留空时最多每 5 秒重新识别活动 LAN 网段；填写时固定网段，逗号分隔 |
+| `TIEZ_LAN_INTERFACE` | 自动选择 | 可固定网卡名称，例如 `br-lan` 或 `phy0-sta0`，该网卡上的网段仍自动刷新；仅在 CIDRS 留空时生效 |
+| `TIEZ_TRUSTED_PROXIES` | 空 | 允许传递真实客户端地址的代理主机，例如本机 Lucky `127.0.0.1/32`；只接受 /32 或 /128，默认不信任代理 |
 | `TIEZ_MAX_FILE_BYTES` | `2147483648` | 单文件上限 2 GiB；`0` 表示不限 |
 | `TIEZ_MAX_STORAGE_BYTES` | `10737418240` | 文件总容量 10 GiB；超限先清理最早上传的已登记文件；`0` 表示不限 |
 | `TIEZ_FILE_TTL_SECS` | `604800` | 上传文件保留 7 天；`0` 关闭按时间清理 |
@@ -239,9 +241,9 @@ iStoreOS 使用 host 网络，12345 被占用时把 `TIEZ_PORT` 改成 `18080`�
 
 服务无需密码，只接受本机回环地址和允许的局域网来源，限制覆盖网页、API、上传、下载和 WebSocket。
 
-- Linux 优先选择 OpenWrt 的 `br-lan`，否则选择默认路由网卡，或唯一可识别的局域网网卡；只允许该网卡的 IPv4 私网/链路本地直连网段，以及 IPv6 ULA/链路本地网段。无法唯一选择时只允许本机，需明确设置 `TIEZ_LAN_CIDRS`；拒绝公网 IP、其它私网和缺失来源信息的请求。非 Linux 无法自动发现时只允许本机，必须填写 `TIEZ_LAN_CIDRS`。
-- iStoreOS/树莓派的 Compose 使用 `network_mode: host`，使程序能读取宿主机直连网段并保留客户端来源。网段变化后重启服务；有复杂多网卡或 VPN 时，建议明确填家里的 LAN CIDR，避免默认路由选中非家庭网卡。
-- 不信任 `Forwarded`、`X-Forwarded-For`、`X-Real-IP`，带这些头的请求直接拒绝；跨站 Origin 也拒绝。请直接连接，不支持隐藏真实来源的反向代理。
+- Linux 优先选择已启用且有链路的 OpenWrt `br-lan`，否则选择活动的默认路由网卡，或唯一候选网卡。排除默认 Docker 网桥、veth 和常见 VPN 网卡。允许该网卡的 IPv4 私网/链路本地网段、IPv6 ULA/链路本地网段，以及同一公网 IPv6 `/64` 或更窄网段；公网 IPv6 地址也可属于同一家庭 LAN，并不因此放行其它公网网段。忽略废弃、暂定、DAD 失败的 IPv6 地址。无法唯一选择时只允许本机；非 Linux 自动检测不可用时必须填写 `TIEZ_LAN_CIDRS`。
+- iStoreOS/树莓派 Compose 使用 `network_mode: host`。将 `TIEZ_LAN_CIDRS` 留空，IPv4 换网段或运营商 IPv6 前缀变化后，下一次请求会触发最多每 5 秒一次的刷新，无需重启；旧网段会撤销。有复杂多网卡时用 `TIEZ_LAN_INTERFACE` 固定家庭网卡名称，避免选择错误。明确填写 CIDRS 会关闭自动刷新。
+- 默认拒绝带来源转发头的请求。需要 HTTPS 域名反向代理时，设置 `TIEZ_TRUSTED_PROXIES` 为实际代理 TCP 来源的单个主机，例如本机 Lucky `127.0.0.1/32`，并保留原始 Host。代理必须用实际连接来源覆盖或追加到 `X-Forwarded-For` 末尾；程序只取最后一个地址做 LAN 检查，不信任客户端自行填写的首个地址。来自其它连接的转发头、缺失客户端来源、跨站 Origin 均拒绝。代理来源为回环时，仅 `/healthz` 允许无转发头的本机健康探测。不要信任会隐藏外网来源的代理。
 - 网段判断不是物理位置证明。若网关、VPN 或代理把远程访问改写为本地来源，应用无法区分；不要将服务经这类设备公开转发，网关防火墙仍应阻止 WAN 访问。
 - 同一允许网段内的设备可查看聊天记录、上传/下载和删除文件。HTTP 为明文传输。
 - Windows/macOS 的 Docker Desktop 使用虚拟网络；推荐在实际 Linux 设备上部署。使用 bridge 模式必须配置真实 LAN CIDR，并确保连接保留原始来源；不要把所有私网都作为放行范围。
@@ -361,7 +363,7 @@ docker pull 14854/tiez-share:latest
 
 ### 通过 Dockge 更新
 
-在原 Stack 使用 `image: 14854/tiez-share:latest`，Linux 使用 `network_mode: host`，保留现有数据挂载路径；`TIEZ_LAN_CIDRS` 可明确指定实际家庭网段，例如 `192.168.8.0/24`。首次升级将 `TIEZ_JOIN_NOTICE` 设为 `0`，然后在 Dockge 保存/部署。后续代码发布成功后，在 Dockge 点击该 Stack 的“更新”即可拉取新镜像并重建，数据挂载保持不变。Watchtower 自动更新默认关闭。
+在原 Stack 使用 `image: 14854/tiez-share:latest`，Linux 使用 `network_mode: host`，保留现有数据挂载路径。推荐 `TIEZ_BIND: "::"`、`TIEZ_LAN_CIDRS: ""` 自动跟随 IPv4/IPv6 网段；需要本机 Lucky 域名反代时设置 `TIEZ_TRUSTED_PROXIES: "127.0.0.1/32"`。首次升级将 `TIEZ_JOIN_NOTICE` 设为 `0`，然后在 Dockge 保存/部署。后续代码发布成功后，在 Dockge 点击该 Stack 的“更新”即可拉取新镜像并重建，数据挂载保持不变。Watchtower 自动更新默认关闭。
 
 ### 手动编译与离线下载
 

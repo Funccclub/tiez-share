@@ -24,6 +24,7 @@ services:
 
     environment:
       TIEZ_PORT: "12345"
+      TIEZ_BIND: "::"
       TIEZ_DATA_DIR: "/data"
       # 界面标题（会显示在所有设备的页面上）
       TIEZ_TITLE: "家庭局域网中转"
@@ -37,6 +38,11 @@ services:
       TIEZ_JOIN_NOTICE: "0"
       # 空值自动检测直连网段；多网段时可明确填写，例如 192.168.8.0/24
       TIEZ_LAN_CIDRS: ""
+      # 可指定稳定网卡名，网段仍自动跟随变化；空值自动选择活动 LAN 网卡
+      TIEZ_LAN_INTERFACE: ""
+      # 使用反向代理才填写；仅信任指定的 /32 或 /128 主机
+      # 例如本机 Lucky: 127.0.0.1/32（代理须覆盖或追加真实 TCP 来源到 XFF 末尾）
+      TIEZ_TRUSTED_PROXIES: ""
       TIEZ_MAX_FILE_BYTES: "2147483648"
       TIEZ_MAX_STORAGE_BYTES: "10737418240"
       TIEZ_FILE_TTL_SECS: "604800"

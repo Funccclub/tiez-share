@@ -139,7 +139,7 @@ pub struct Config {
     pub file_ttl_secs: u64,
     pub upload_ttl_secs: u64,
     pub cleanup_interval_secs: u64,
-    pub lan_networks: Vec<crate::network::Network>,
+    pub lan_networks: std::sync::Arc<crate::network::Policy>,
 }
 
 pub struct UploadSession {

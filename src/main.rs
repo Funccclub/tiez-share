@@ -101,10 +101,10 @@ fn load_config() -> Config {
         file_ttl_secs: env_parsed("TIEZ_FILE_TTL_SECS", 7 * 86400u64),
         upload_ttl_secs: env_parsed("TIEZ_UPLOAD_TTL_SECS", 3600u64).max(1),
         cleanup_interval_secs: env_parsed("TIEZ_CLEANUP_INTERVAL_SECS", 60u64).max(1),
-        lan_networks: network::networks().unwrap_or_else(|e| {
-            eprintln!("[tiez-share] invalid TIEZ_LAN_CIDRS: {e}");
+        lan_networks: Arc::new(network::Policy::load().unwrap_or_else(|e| {
+            eprintln!("[tiez-share] invalid LAN configuration: {e}");
             std::process::exit(1)
-        }),
+        })),
     }
 }
 
@@ -186,7 +186,7 @@ async fn main() {
         .layer(DefaultBodyLimit::disable())
         .layer(axum::middleware::from_fn_with_state(state.clone(), network::lan_only));
 
-    let addr: SocketAddr = match format!("{}:{}", cfg.bind, cfg.port).parse() {
+    let addr: SocketAddr = match cfg.bind.parse::<std::net::IpAddr>().map(|ip| SocketAddr::new(ip, cfg.port)) {
         Ok(addr) => addr,
         Err(_) => {
             eprintln!(
