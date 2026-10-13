@@ -580,6 +580,25 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
         .file-name {{ font-weight: 700; font-family: var(--font-mono); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }}
         .file-size {{ font-size: 11px; font-family: var(--font-mono); opacity: 0.8; margin-top: 2px; }}
 
+        /* 复制按钮：绝对定位贴在气泡右下角，鼠标悬停整条消息时浮现。
+           触屏没有 hover 状态，用 @media (hover: none) 常驻半透明显示。 */
+        .bubble.has-copy {{ padding-right: 34px; }}
+        .copy-btn {{
+            position: absolute; right: 6px; bottom: 6px;
+            width: 24px; height: 24px; padding: 0; margin: 0;
+            display: flex; align-items: center; justify-content: center;
+            font: inherit; color: inherit; background: transparent;
+            border: 1px solid transparent; border-radius: 6px;
+            cursor: pointer; opacity: 0;
+            transition: opacity .15s ease, background .15s ease;
+        }}
+        .message:hover .copy-btn, .copy-btn:focus-visible {{ opacity: .65; }}
+        .copy-btn:hover {{ opacity: 1; background: rgba(127,127,127,.18); }}
+        .copy-btn.copied {{ opacity: 1; }}
+        /* 触屏没有 hover 就没有浮现过程，必须常驻可见。
+           0.4 太淡——sticky-note 主题下发送气泡是白字，本来对比度就低。 */
+        @media (hover: none) {{ .copy-btn {{ opacity: .65; }} }}
+
         /* Image Preview */
         .img-preview {{
             max-width: 100%;
@@ -858,7 +877,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             <span>FULL SCREEN EDIT</span>
             <span onclick="closeFullscreen()" style="cursor:pointer; padding:4px;">✕</span>
         </div>
-        <textarea id="fs-textarea" placeholder="输入内容..."></textarea>
+        <textarea id="fs-textarea" placeholder="输入内容..." enterkeyhint="send"></textarea>
         <div class="fs-toolbar">
             <button class="retro-btn" onclick="closeFullscreen()">CANCEL</button>
             <button class="retro-btn send-btn" onclick="sendFullscreen()">SEND</button>
@@ -869,7 +888,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
         <label for="file-input" class="retro-btn add-btn">+</label>
         <button class="retro-btn files-btn" id="files-toggle" title="显示/隐藏文件区">📁</button>
         <div style="position:relative; flex:1; display:flex;">
-            <textarea class="text-input" id="text-input" placeholder="输入文字..." rows="1"></textarea>
+            <textarea class="text-input" id="text-input" placeholder="输入文字... 回车发送" rows="1" enterkeyhint="send"></textarea>
             <div class="expand-btn" id="expand-btn" onclick="openFullscreen()">⤢</div>
         </div>
         <button class="retro-btn send-btn" id="send-btn">SEND</button>
@@ -1036,6 +1055,73 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             }}
             return null;
         }}
+
+        // 复制按钮的图标。用内联 SVG 而不是 emoji / 符号字形：
+        // 路由器上访问的设备什么系统都有，字形覆盖不可控。
+        const COPY_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="9" rx="1.5"></rect><path d="M10.5 3.2V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v6.5a1 1 0 0 0 1 1h.2"></path></svg>';
+        const COPIED_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5l3.5 3.5 7.5-8"></path></svg>';
+
+        // 页面通常是用 http://路由器IP:12345 打开的，那不是安全上下文，
+        // navigator.clipboard 不存在，必须保留 execCommand 兜底。
+        async function copyToClipboard(text) {{
+            try {{
+                if (window.isSecureContext && navigator.clipboard) {{
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }}
+            }} catch (e) {{ /* 权限被拒等情况落到下面的兜底 */ }}
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, ta.value.length);
+            let ok = false;
+            try {{ ok = document.execCommand('copy'); }} catch (e) {{ ok = false; }}
+            ta.remove();
+            return ok;
+        }}
+
+        // 文字消息复制正文；图片/视频/文件复制可用的下载链接（补成绝对地址，
+        // 直接复制 /download/xxx 别人打开没意义）。data: 和 blob: 复制出来没法用，
+        // 不给按钮——上传中的占位气泡正好走这条路。
+        function copyTargetOf(content, msgType, file_path) {{
+            const link = content.startsWith('/download/') ? content : (file_path || '');
+            if (link && !/^(data|blob):/.test(link)) {{
+                return /^https?:/i.test(link) ? link : window.location.origin + link;
+            }}
+            if (msgType === 'image' || msgType === 'video' || msgType === 'file' || file_path) return '';
+            return content || '';
+        }}
+
+        function attachCopyButton(bubble, text) {{
+            if (!text) return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'copy-btn';
+            btn.innerHTML = COPY_ICON;
+            btn.title = '复制';
+            btn.setAttribute('aria-label', '复制消息');
+            // 气泡本身挂了 onclick 跳转下载，复制按钮必须拦住冒泡，
+            // 否则点"复制"会变成下载文件。
+            btn.addEventListener('click', async (e) => {{
+                e.preventDefault();
+                e.stopPropagation();
+                if (await copyToClipboard(text)) {{
+                    btn.innerHTML = COPIED_ICON;
+                    btn.classList.add('copied');
+                    setTimeout(() => {{
+                        btn.innerHTML = COPY_ICON;
+                        btn.classList.remove('copied');
+                    }}, 1200);
+                }}
+            }});
+            bubble.appendChild(btn);
+            bubble.classList.add('has-copy');
+        }}
+
         function createMessageElement(direction, content, senderName, msgType, file_path) {{
             const div = document.createElement('div');
             div.className = `message ${{direction}}`;
@@ -1080,12 +1166,14 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
                 </div>
             `;
             
+            const bubble = div.querySelector('.bubble');
             const downloadUrl = content.startsWith('/download/') ? content : file_path;
             if (downloadUrl && msgType !== 'image' && msgType !== 'video') {{
-                div.querySelector('.bubble').style.cursor = 'pointer';
-                div.querySelector('.bubble').onclick = () => window.location.href = downloadUrl;
+                bubble.style.cursor = 'pointer';
+                bubble.onclick = () => window.location.href = downloadUrl;
             }}
-            
+            attachCopyButton(bubble, copyTargetOf(content, msgType, file_path));
+
             return div;
         }}
 
@@ -1120,6 +1208,27 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             const newHeight = Math.min(this.scrollHeight, 100);
             this.style.height = newHeight + 'px';
             document.getElementById('expand-btn').style.display = newHeight > 50 ? 'flex' : 'none';
+        }});
+
+        // 回车直接发送，Shift+回车换行。
+        // e.isComposing 必须挡掉：中文输入法组字时按回车是"选词"，
+        // 旧版 WebKit 上 isComposing 还没置位，用 keyCode 229 兜一层。
+        function isEnterToSend(e) {{
+            if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return false;
+            return !e.isComposing && e.keyCode !== 229;
+        }}
+
+        textInput.addEventListener('keydown', (e) => {{
+            if (!isEnterToSend(e)) return;
+            e.preventDefault();
+            sendBtn.click();
+        }});
+
+        // 全屏编辑器同理，否则两个输入框行为不一致
+        document.getElementById('fs-textarea').addEventListener('keydown', (e) => {{
+            if (!isEnterToSend(e)) return;
+            e.preventDefault();
+            sendFullscreen();
         }});
 
         textInput.addEventListener('focus', () => {{
