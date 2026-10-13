@@ -1,5 +1,52 @@
 fn file_transfer_theme_variants(theme: &str) -> (&'static str, &'static str, &'static str) {
     match theme {
+        "liquid-glass" => (
+            r#"
+            --bg-body: #edf2fa;
+            --bg-panel: rgba(255, 255, 255, 0.58);
+            --bg-input: rgba(255, 255, 255, 0.68);
+            --bg-button: rgba(255, 255, 255, 0.48);
+            --border-dark: rgba(47, 67, 104, 0.12);
+            --text-primary: #202a3e;
+            --text-secondary: #56647c;
+            --accent-color: #1966d2;
+            --shadow-color: rgba(39, 62, 104, 0.08);
+            --font-mono: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+            --radius: 20px;
+            --bubble-received-bg: rgba(255, 255, 255, 0.83);
+            --glass-solid: #f5f7fc;
+            --glass-border: rgba(255, 255, 255, 0.8);
+            --glass-highlight: rgba(255, 255, 255, 0.9);
+            --glass-sent: linear-gradient(145deg, #2878e5, #155bc7);
+            --glass-focus: rgba(25, 102, 210, 0.15);
+            --glass-orb-blue: rgba(125, 182, 245, 0.48);
+            --glass-orb-peach: rgba(251, 194, 168, 0.42);
+            --glass-orb-lilac: rgba(202, 186, 242, 0.35);
+            --glass-color-scheme: light;
+            "#,
+            r#"
+            --bg-body: #101827;
+            --bg-panel: rgba(30, 40, 58, 0.74);
+            --bg-input: rgba(15, 24, 40, 0.62);
+            --bg-button: rgba(255, 255, 255, 0.08);
+            --border-dark: rgba(208, 223, 255, 0.15);
+            --text-primary: #edf3ff;
+            --text-secondary: #b1bed3;
+            --accent-color: #91baff;
+            --shadow-color: rgba(0, 0, 0, 0.2);
+            --bubble-received-bg: rgba(35, 47, 68, 0.92);
+            --glass-solid: #1e2a3e;
+            --glass-border: rgba(220, 233, 255, 0.18);
+            --glass-highlight: rgba(233, 242, 255, 0.16);
+            --glass-sent: linear-gradient(145deg, #2876da, #185bc2);
+            --glass-focus: rgba(145, 186, 255, 0.2);
+            --glass-orb-blue: rgba(35, 79, 145, 0.4);
+            --glass-orb-peach: rgba(113, 65, 86, 0.28);
+            --glass-orb-lilac: rgba(68, 52, 122, 0.3);
+            --glass-color-scheme: dark;
+            "#,
+            include_str!("liquid_glass.css"),
+        ),
         "sticky-note" => (
             r#"
             --bg-body: #fff4b8;
@@ -316,6 +363,11 @@ fn file_transfer_theme_css(theme: &str, color_mode: &str) -> String {
 
 pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &str) -> String {
     let theme_css = file_transfer_theme_css(theme, color_mode);
+    let theme_script = if theme == "liquid-glass" {
+        include_str!("liquid_glass.js")
+    } else {
+        ""
+    };
     let mode_class = match color_mode {
         "dark" => "dark-mode",
         "light" => "light-mode",
@@ -325,7 +377,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
     format!(
         r#"
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh" data-theme="{theme}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
@@ -354,7 +406,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
                 --text-primary: #e0e0e0;
                 --shadow-color: rgba(0,0,0,0.5);
             }}
-            :root:not(.theme-mica):not(.theme-acrylic) {{
+            :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) {{
                 --bg-body: #121212; /* Slightly cooler black */
                 --bg-panel: #1e1e1e;
                 --border-dark: #2a2a2a; /* Dark gray instead of pure black for borders */
@@ -532,22 +584,22 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
         }}
 
         /* Triangle tail for retro style only */
-        :root:not(.theme-mica):not(.theme-acrylic) .message.received .bubble::after {{
+        :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .message.received .bubble::after {{
             content: ''; position: absolute; left: -10px; top: 10px;
             width: 0; height: 0; border: 5px solid transparent;
             border-right-color: var(--bubble-received-bg);
         }}
-        :root:not(.theme-mica):not(.theme-acrylic) .message.received .bubble::before {{
+        :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .message.received .bubble::before {{
             content: ''; position: absolute; left: -13px; top: 9px;
             width: 0; height: 0; border: 6px solid transparent;
             border-right-color: var(--border-dark);
         }}
-        :root:not(.theme-mica):not(.theme-acrylic) .message.sent .bubble::after {{
+        :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .message.sent .bubble::after {{
             content: ''; position: absolute; right: -10px; top: 10px;
             width: 0; height: 0; border: 5px solid transparent;
             border-left-color: var(--accent-color);
         }}
-        :root:not(.theme-mica):not(.theme-acrylic) .message.sent .bubble::before {{
+        :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .message.sent .bubble::before {{
             content: ''; position: absolute; right: -13px; top: 9px;
             width: 0; height: 0; border: 6px solid transparent;
             border-left-color: var(--border-dark);
@@ -770,22 +822,22 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             .theme-mica .text-input, .theme-acrylic .text-input {{ background: rgba(255,255,255,0.05); color: #fff; }}
 
             /* Retro Dark Mode Overrides */
-            :root:not(.theme-mica):not(.theme-acrylic) .retro-btn {{
+            :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .retro-btn {{
                 background: #333;
                 border-color: #000;
                 color: #e0e0e0;
                 box-shadow: 2px 2px 0 0 #000;
             }}
-            :root:not(.theme-mica):not(.theme-acrylic) .retro-btn:active {{
+            :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .retro-btn:active {{
                 box-shadow: none;
                 transform: translate(2px, 2px);
             }}
-            :root:not(.theme-mica):not(.theme-acrylic) .retro-btn.send-btn {{
+            :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .retro-btn.send-btn {{
                 background: #000;
                 color: #fff;
                 border-color: #000;
             }}
-            :root:not(.theme-mica):not(.theme-acrylic) .text-input {{
+            :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) .text-input {{
                 background: #202020;
                 color: #e0e0e0;
                 border-color: #000;
@@ -815,7 +867,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             .theme-mica #fs-editor, .theme-acrylic #fs-editor {{ background: rgba(20,20,20,0.95); }}
             
             /* Retro Dark Mode Overrides for Fullscreen Editor */
-            :root:not(.theme-mica):not(.theme-acrylic) #fs-textarea {{
+            :root:not(.theme-mica):not(.theme-acrylic):not([data-theme="liquid-glass"]) #fs-textarea {{
                 background: #202020;
                 color: #e0e0e0;
                 border: 2px solid #000;
@@ -1688,12 +1740,14 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
         loadFiles();
 
     </script>
+    <script>{theme_script}</script>
 </body>
 </html>
     "#,
         theme = theme,
         mode_class = mode_class,
         theme_css = theme_css,
+        theme_script = theme_script,
         logo_base64 = logo_base64,
         title = title
     )

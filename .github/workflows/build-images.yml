@@ -74,6 +74,23 @@ jobs:
           node tests/smoke.mjs
           node tests/retention.mjs tiez-share:${{ matrix.arch }}
           node tests/network.mjs tiez-share:${{ matrix.arch }}
+      - name: Liquid glass smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke-glass --network host --platform ${{ matrix.platform }} \
+            -e TIEZ_THEME=liquid-glass -e TIEZ_PORT=12346 tiez-share:${{ matrix.arch }}
+          trap 'docker logs smoke-glass; docker rm -f smoke-glass' EXIT
+          ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:12346/healthz; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = 1
+          BASE=http://127.0.0.1:12346 node tests/smoke.mjs
       - name: Container logs
         if: always()
         run: docker logs smoke || true

@@ -28,7 +28,7 @@ services:
       TIEZ_DATA_DIR: "/data"
       # 界面标题（会显示在所有设备的页面上）
       TIEZ_TITLE: "家庭局域网中转"
-      # sticky-note | paper | mica | acrylic
+      # sticky-note | paper | mica | acrylic | liquid-glass
       TIEZ_THEME: "mica"
       # system | light | dark
       TIEZ_COLOR_MODE: "system"
