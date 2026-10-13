@@ -38,13 +38,26 @@ impl Network {
     }
 }
 
+fn choose_interface(routes: &str, interfaces: &[String]) -> Option<String> {
+    if interfaces.iter().any(|i| i == "br-lan") { return Some("br-lan".into()); }
+    let default = routes.lines().skip(1).filter_map(|line| {
+        let f: Vec<_> = line.split_whitespace().collect();
+        if f.len() < 8 || f[1] != "00000000" { return None; }
+        let flags = u32::from_str_radix(f[3], 16).ok()?;
+        if flags & 1 == 0 || !interfaces.iter().any(|i| i == f[0]) { return None; }
+        Some((f[6].parse::<u64>().ok()?, f[0].to_string()))
+    }).min_by_key(|(metric, _)| *metric).map(|(_, iface)| iface);
+    default.or_else(|| if interfaces.len() == 1 { Some(interfaces[0].clone()) } else { None })
+}
+
 pub fn networks() -> Result<Vec<Network>, String> {
     if let Ok(value) = std::env::var("TIEZ_LAN_CIDRS") {
         if !value.trim().is_empty() { return value.split(',').map(Network::parse).collect(); }
     }
-    let mut out = Vec::new();
+    let mut candidates = Vec::new();
+    let routes = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
     // Linux routing table: only directly connected networks, never the default route.
-    if let Ok(routes) = std::fs::read_to_string("/proc/net/route") {
+    {
         for line in routes.lines().skip(1) {
             let f: Vec<_> = line.split_whitespace().collect();
             if f.len() < 8 || f[2] != "00000000" { continue; }
@@ -54,7 +67,9 @@ pub fn networks() -> Result<Vec<Network>, String> {
                 let mask = u32::from_be_bytes(mask.to_le_bytes());
                 let prefix = mask.leading_ones();
                 if flags & 1 != 0 && prefix > 0 && mask == u32::MAX << (32-prefix) {
-                    if let Ok(net) = Network::parse(&format!("{dest}/{prefix}")) { out.push(net); }
+                    if f[0] != "lo" {
+                        if let Ok(net) = Network::parse(&format!("{dest}/{prefix}")) { candidates.push((f[0].to_string(), net)); }
+                    }
                 }
             }
         }
@@ -62,15 +77,19 @@ pub fn networks() -> Result<Vec<Network>, String> {
     if let Ok(interfaces) = std::fs::read_to_string("/proc/net/if_inet6") {
         for line in interfaces.lines() {
             let f: Vec<_> = line.split_whitespace().collect();
-            if f.len() >= 3 {
+            if f.len() >= 6 && f[5] != "lo" {
                 if let (Ok(ip), Ok(prefix)) = (u128::from_str_radix(f[0],16), u32::from_str_radix(f[2],16)) {
                     let ip = std::net::Ipv6Addr::from(ip);
-                    if let Ok(net) = Network::parse(&format!("{ip}/{prefix}")) { out.push(net); }
+                    if let Ok(net) = Network::parse(&format!("{ip}/{prefix}")) { candidates.push((f[5].to_string(), net)); }
                 }
             }
         }
     }
-    Ok(out)
+    let mut interfaces: Vec<_> = candidates.iter().map(|(iface, _)| iface.clone()).collect();
+    interfaces.sort(); interfaces.dedup();
+    let chosen = choose_interface(&routes, &interfaces);
+    if chosen.is_none() { eprintln!("[tiez-share] LAN interface is ambiguous or unavailable; only loopback is allowed. Set TIEZ_LAN_CIDRS."); }
+    Ok(candidates.into_iter().filter(|(iface,_)| Some(iface) == chosen.as_ref()).map(|(_,net)| net).collect())
 }
 
 pub fn allowed(ip: IpAddr, networks: &[Network]) -> bool {
@@ -97,6 +116,14 @@ pub async fn lan_only(State(state): State<Arc<AppState>>, request: Request, next
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn select_lan_without_trusting_wan_or_docker() {
+        let routes = "Iface Destination Gateway Flags RefCnt Use Metric Mask\neth0 00000000 0100000A 0003 0 0 100 00000000\n";
+        assert_eq!(choose_interface(routes, &["eth0".into(), "docker0".into()]), Some("eth0".into()));
+        assert_eq!(choose_interface(routes, &["eth0".into(), "br-lan".into()]), Some("br-lan".into()));
+        assert_eq!(choose_interface("", &["eth0".into(), "eth1".into()]), None);
+        assert_eq!(choose_interface("", &["eth0".into()]), Some("eth0".into()));
+    }
     #[test]
     fn restrict_to_actual_subnet() {
         let nets = vec![Network::parse("192.168.8.0/24").unwrap(), Network::parse("fd12:3456::/64").unwrap()];
