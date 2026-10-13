@@ -1000,7 +1000,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
         function normalizeFileName(name) {{
             if (!name) return '';
             const base = name.split('/').pop().split('\\').pop();
-            const m = base.match(/^\d{{8,}}_(.+)$/);
+            const m = base.match(/^\d{{8,}}_(?:[0-9a-f]{{16,}}-[0-9a-f]+_)?(.+)$/);
             return escapeHTML(m ? m[1] : base);
         }}
 
@@ -1009,7 +1009,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
         function displayName(name) {{
             if (!name) return '';
             const base = name.split('/').pop().split('\\').pop();
-            const m = base.match(/^\d{{8,}}_(.+)$/);
+            const m = base.match(/^\d{{8,}}_(?:[0-9a-f]{{16,}}-[0-9a-f]+_)?(.+)$/);
             return m ? m[1] : base;
         }}
         function extractNameFromContent(content, file_path) {{
@@ -1328,6 +1328,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
 
         async function uploadFile(file) {{
             isUploading = true;
+            const uploadSenderId = deviceId, uploadSenderName = deviceName;
             const isImage = file.type.startsWith('image/');
             const isVideo = file.type.startsWith('video/');
             const msgType = isVideo ? 'video' : (isImage ? 'image' : 'file');
@@ -1359,8 +1360,8 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
                     const formData=new FormData();
                     formData.append('file',file.slice(i*CHUNK_SIZE,(i+1)*CHUNK_SIZE));
                     formData.append('metadata',JSON.stringify({{upload_id:uploadId,chunk_index:i,
-                        total_chunks:totalChunks,file_name:file.name,sender_id:deviceId,
-                        sender_name:deviceName,total_size:file.size,content_type:file.type,
+                        total_chunks:totalChunks,file_name:file.name,sender_id:uploadSenderId,
+                        sender_name:uploadSenderName,total_size:file.size,content_type:file.type,
                         chunk_sha256:hashes[i],file_sha256:fileHash}}));
                     for(let attempt=0;;attempt++) {{
                         const controller=new AbortController();

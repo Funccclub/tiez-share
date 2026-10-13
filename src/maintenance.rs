@@ -19,7 +19,8 @@ fn save_index(state: &AppState) -> std::io::Result<()> {
 pub fn safe_file(state: &AppState, path: &Path) -> bool {
     let root = state.cfg.data_dir.canonicalize();
     let parent = path.parent().and_then(|p| p.canonicalize().ok());
-    root.ok() == parent && std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+    matches!((root, parent), (Ok(root), Some(parent)) if root == parent) &&
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
 pub fn record_file(state: &AppState, path: &Path) -> std::io::Result<()> {

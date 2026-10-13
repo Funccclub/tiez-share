@@ -22,6 +22,7 @@ async function waitFor(predicate, message) {
 }
 function start(ttl) {
   docker('run', '-d', '--name', name, '--network', 'host',
+    '-e', 'TIEZ_LAN_CIDRS=192.168.8.0/24',
     '-e', 'TIEZ_PORT=12346', '-e', `TIEZ_FILE_TTL_SECS=${ttl}`,
     '-e', 'TIEZ_MAX_FILE_BYTES=8192', '-e', 'TIEZ_MAX_STORAGE_BYTES=10000',
     '-e', 'TIEZ_UPLOAD_TTL_SECS=1', '-e', 'TIEZ_CLEANUP_INTERVAL_SECS=1',
@@ -32,12 +33,21 @@ async function ready() {
 }
 async function upload(name, size) {
   const form = new FormData(); form.append('file', new Blob([new Uint8Array(size)]), name);
-  return fetch(base+'/upload',{method:'POST',body:form});
+  // Buffer this tiny fixture so a deliberate early 413 cannot race Undici's
+  // multipart streaming writer and surface EPIPE instead of the HTTP status.
+  const request = new Request(base+'/upload',{method:'POST',body:form});
+  return fetch(request.url,{method:'POST',headers:request.headers,body:await request.arrayBuffer()});
 }
 async function files() { return (await (await fetch(base+'/files')).json()).files; }
 
 try {
   start(0); await ready();
+  let denied = false;
+  try {
+    docker('run','--rm','--add-host=host.docker.internal:host-gateway',
+      '--entrypoint','wget',image,'-S','-O-','http://host.docker.internal:12346/healthz');
+  } catch(error) { denied = /403/.test(String(error.stderr)); }
+  assert.ok(denied, 'a different private subnet is denied without relying on proxy headers');
   assert.equal((await upload('too-large.bin', 9000)).status,413);
   assert.equal((await upload('first.bin', 6000)).status,200);
   let entries=await files();
@@ -47,6 +57,7 @@ try {
   assert.ok(!entries.some(f=>f.name.endsWith('first.bin')), 'quota evicts oldest managed file');
   assert.ok(entries.some(f=>f.name.endsWith('second.bin')));
   assert.ok(entries.some(f=>f.name==='manual.txt'), 'quota preserves unregistered file');
+  assert.ok(!entries.some(f=>f.name==='linked.txt'), 'symlinks never become shared downloads');
   const history=await (await fetch(base+'/poll')).json();
   assert.ok(!history.some(m=>m.file_path?.endsWith('first.bin')), 'cleanup removes stale history');
   assert.equal((await fetch(base+first.url)).status,404);

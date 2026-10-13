@@ -148,7 +148,7 @@ docker compose logs -f          # 看到 TieZ Share 的启动横幅就成功了
 
 ```sh
 docker run -d --name tiez-share --restart unless-stopped \
-  -p 12345:12345 \
+  --network host \
   -e TIEZ_TITLE="家庭局域网中转" \
   -v /mnt/sda1/tiez-share:/data \
   tiez-share:arm64
@@ -209,22 +209,42 @@ http://<旁路由的LAN地址>:12345
 | `TIEZ_COLOR_MODE` | `system` | `system` / `light` / `dark` |
 | `TIEZ_LOGO` | 内置 SVG | 头像图标，可填图片 URL 或 data URI |
 | `TIEZ_JOIN_NOTICE` | `0` | 加入/离开提醒，默认关闭；设为 `1` 可启用 |
+| `TIEZ_LAN_CIDRS` | 自动检测 | 允许的直连网段，逗号分隔，例如 `192.168.8.0/24`；回环地址始终允许 |
+| `TIEZ_MAX_FILE_BYTES` | `2147483648` | 单文件上限 2 GiB；`0` 表示不限 |
+| `TIEZ_MAX_STORAGE_BYTES` | `10737418240` | 文件总容量 10 GiB；超限先清理最早上传的已登记文件；`0` 表示不限 |
+| `TIEZ_FILE_TTL_SECS` | `604800` | 上传文件保留 7 天；`0` 关闭按时间清理 |
+| `TIEZ_UPLOAD_TTL_SECS` | `3600` | 未完成上传和重试记录闲置 1 小时后回收 |
+| `TIEZ_CLEANUP_INTERVAL_SECS` | `60` | 周期清理间隔；上传时也检查容量 |
+
+### 上传完整性与重试
+
+网页分片上传前计算完整文件及每个分片的 SHA-256（普通 HTTP 局域网页面也可用），服务端校验分片顺序、内容和最终大小/哈希。网络错误、超时和临时服务错误最多自动重试 3 次，已收到且内容一致的分片只确认一次，最后一片重试也不会重复产生文件或消息。空文件也能上传。
+
+旧客户端可以不传 SHA-256，仍会执行顺序、重复内容和总大小校验。每片最大 1 MiB；网页使用 512 KiB。上传先写隐藏临时文件，全部校验成功后才发布。进程重启后未完成的上传需重新开始；这里的重试不等同于跨重启断点续传。
+
+### 文件自动清理
+
+**默认会删除超过 7 天的上传文件；容量超出 10 GiB 时，优先删除最早上传的文件。** 删除会同步移除关联聊天记录并刷新在线设备的文件区。可通过上述环境变量调整。
+
+只对新版登记到 `.tiez-managed.json` 的上传文件执行自动淘汰；手动放入的文件、升级前未登记的旧文件、历史文件和符号链接不会自动删除。手动文件仍计入容量，无法腾出空间时返回 `507`，单文件超限返回 `413`。不要删除登记文件，否则这些上传会失去自动清理记录。未完成上传的 `.tmp_tiez_*` 文件会在超时后清理，包括服务重启遗留的临时文件。
+
 
 ### 端口冲突了怎么办
 
-iStoreOS 上 12345 被占用的话，把 compose 里的 `"12345:12345"` 改成 `"18080:12345"`（只改左边，容器内还是 12345），然后访问 `http://路由器IP:18080`。
+iStoreOS 使用 host 网络，12345 被占用时把 `TIEZ_PORT` 改成 `18080`，然后访问 `http://路由器IP:18080`。无需配置 `ports` 映射。
 
 ---
 
 ## 6. 安全提醒
 
-这个服务**没有任何认证**，设计前提是"只在家里局域网里跑"：
+服务无需密码，只接受本机回环地址和允许的局域网来源，限制覆盖网页、API、上传、下载和 WebSocket。
 
-- 局域网内任何人打开这个地址，就能看到全部聊天记录、下载全部中转文件。
-- 明文 HTTP，同网段抓包可见内容。
-- **不要做端口映射到公网**。需要外网访问就用 WireGuard/Tailscale 回家再连，或者在前面套一层带认证的反向代理。
-- 想限制访问范围，可以在路由器防火墙里只放行指定网段/设备访问 `12345`。
-- 容器默认以 root 运行（这样挂载盘权限最不容易出问题）。想收紧的话，在 compose 里加 `user: "1000:1000"`，并确保 `/mnt/sda1/tiez-share` 属于该 uid。
+- Linux 默认读取直连路由的 IPv4 私网/链路本地网段，以及 IPv6 ULA/链路本地网段；拒绝公网 IP、其它私网和缺失来源信息的请求。非 Linux 无法自动发现时只允许本机，必须填写 `TIEZ_LAN_CIDRS`。
+- iStoreOS/树莓派的 Compose 使用 `network_mode: host`，使程序能读取宿主机直连网段并保留客户端来源。网段变化后重启服务；有多个网卡、Docker 网桥或 VPN 时，建议明确填家里的 LAN CIDR，避免把其它直连网络也列为允许范围。
+- 不信任 `Forwarded`、`X-Forwarded-For`、`X-Real-IP`，带这些头的请求直接拒绝；跨站 Origin 也拒绝。请直接连接，不支持隐藏真实来源的反向代理。
+- 网段判断不是物理位置证明。若网关、VPN 或代理把远程访问改写为本地来源，应用无法区分；不要将服务经这类设备公开转发，网关防火墙仍应阻止 WAN 访问。
+- 同一允许网段内的设备可查看聊天记录、上传/下载和删除文件。HTTP 为明文传输。
+- Windows/macOS 的 Docker Desktop 使用虚拟网络；推荐在实际 Linux 设备上部署。使用 bridge 模式必须配置真实 LAN CIDR，并确保连接保留原始来源；不要把所有私网都作为放行范围。
 
 ---
 
@@ -233,17 +253,17 @@ iStoreOS 上 12345 被占用的话，把 compose 里的 `"12345:12345"` 改成 `
 | 现象 | 原因 / 处理 |
 | :--- | :--- |
 | 启动日志 `data dir ... is not writable` | 挂载盘没挂上或权限不对；`df -h` 确认挂载，`chmod 777 /mnt/sda1/tiez-share` |
-| `cannot bind 0.0.0.0:12345` | 端口被占用，改映射端口 |
+| `cannot bind 0.0.0.0:12345` | 端口被占用，改 `TIEZ_PORT` |
 | 页面能开但发不出消息 | 看 `docker compose logs`；确认用的 `http://` 而不是 `https://`（WebSocket 协议会自动跟随） |
 | 图片显示不出来 | 文件已过期或不在盘上；记录里只保留 1000 条，超出会滚动删除 |
-| 手机上传大文件失败 | 服务端不限制体积，一般是浏览器/网络问题；大文件建议走分片上传（网页端已内置） |
+| 手机上传大文件失败 | 检查单文件/总容量限制；`413` 为超大小，`507` 为空间不足；网页会自动重试临时网络错误 |
 | 想看实时状态 | `docker exec tiez-share wget -qO- http://127.0.0.1:12345/healthz` |
 
 ---
 
 ## 8. 自检（可选）
 
-仓库里带了一个零依赖的端到端自检脚本（只用 Node 22+ 内置的 `fetch` / `WebSocket`，不需要 `npm install`），可以验证聊天室、上传下载、分片、断点续传、路径穿越防护、左侧文件区是否正常：
+仓库里带了一个零依赖的端到端自检脚本（只用 Node 22+ 内置的 `fetch` / `WebSocket`，不需要 `npm install`），可以验证聊天室、上传下载、分片、分片重试/校验、路径穿越防护、左侧文件区是否正常：
 
 ```bash
 # 本地测试镜像
@@ -295,6 +315,8 @@ tiez-share/
     ├── handlers.rs         # 路由（移植自上游 handlers.rs）
     ├── models.rs           # 数据结构与运行状态
     ├── store.rs            # 历史持久化、文件名/token 处理
+    ├── maintenance.rs      # 上传文件登记、容量与过期清理
+    ├── network.rs          # 同网段来源限制
     └── web_ui.rs           # 网页聊天室界面（源自上游，GPL-3.0）
 ```
 
@@ -302,8 +324,7 @@ tiez-share/
 
 ## 10. 附：不走 Docker 的备选方案（OpenWrt 原生服务）
 
-云编译产物里的 `tiez-share-arm64` 是从同一个镜像里抽出来的**静态链接**二进制（1.4 MB，
-`ELF 64-bit ARM aarch64, statically linked, stripped`），不依赖 OpenWrt 的任何库。
+云编译产物里的 `tiez-share-arm64` 是从同一个镜像里抽出来的**静态链接**二进制（`ELF 64-bit ARM aarch64, statically linked, stripped`），不依赖 OpenWrt 的任何库。
 万一你的路由器上 Docker 版本太老、`docker load` 不认这个包，可以直接当原生服务跑：
 
 ```sh
@@ -328,7 +349,7 @@ logread -e tiez-share -f          # 看启动日志
 
 打开 [Actions](https://github.com/Funccclub/tiez-share/actions/workflows/build-images.yml)，选择 **Run workflow** 即可手动构建。推送代码到 `main` 或创建 `v*` 标签也会自动构建；只修改文档不会触发。
 
-两套镜像分别编译，并启动容器运行 `tests/smoke.mjs` 自检。ARM64 编译使用交叉工具链，运行自检时使用 QEMU。无需 Docker Hub 账号、密码或额外 Secrets。
+两套镜像分别编译，执行 Rust 网段判断单元测试，启动容器运行 `tests/smoke.mjs` 自检，再用 `tests/retention.mjs` 验证容量淘汰、过期/临时文件清理、重启持久化和手动文件/符号链接保护。ARM64 编译使用交叉工具链，运行自检时使用 QEMU。无需 Docker Hub 账号、密码或额外 Secrets。
 
 | 下载产物 | 对应设备 | 镜像标签 |
 |---|---|---|
@@ -347,7 +368,7 @@ docker load -i tiez-share-arm64.tar.gz
 # x86_64 则导入 tiez-share-amd64.tar.gz
 # 然后启动（按设备修改数据目录，x86_64 改用 tiez-share:amd64）
 docker run -d --name tiez-share --restart unless-stopped \
-  -p 12345:12345 \
+  --network host \
   -v /mnt/sda1/tiez-share:/data \
   tiez-share:arm64
 ```
