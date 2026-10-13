@@ -6,13 +6,13 @@
 #   3. 把这个文件放到路由器上，例如 /root/tiez-share/docker-compose.yml
 #   4. cd /root/tiez-share && docker compose up -d
 #
-# 镜像从 GitHub Actions 下载后 docker load 导入。
-# x86_64 设备把 image 换成 tiez-share:amd64，
+# GitHub Actions 自动构建并发布到 Docker Hub，自动匹配 ARM64 / x86_64。
+# 也可以从 Actions 下载镜像包后导入，使用本地标签，
 # 或者改用下面注释里的 build 段在路由器上直接编译。
 
 services:
   tiez-share:
-    image: tiez-share:arm64
+    image: 14854/tiez-share:latest
     # 想直接在路由器上编译镜像就改用下面两行（第一次会比较慢）：
     # build:
     #   context: .
@@ -53,8 +53,7 @@ services:
       - /mnt/sda1/tiez-share:/data
 
     labels:
-      # 镜像手动导入，关闭 watchtower 自动更新。
-      # 更新时重新下载并导入镜像，然后重建容器。
+      # 在 Dockge 中手动拉取和更新，关闭 watchtower 自动更新。
       com.centurylinklabs.watchtower.enable: "false"
 
     # 路由器性能弱，本想限一下内存，但 iStoreOS 内核没开 cgroup 内存限制，
