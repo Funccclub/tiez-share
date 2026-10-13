@@ -187,17 +187,9 @@ http://<旁路由的LAN地址>:12345
 - 你手动往挂载的存储目录里丢的文件，刷新后也会出现在列表里，同样能下载和删除。
 - `history.jsonl` 这类属于服务自身的数据文件会被排除，既不会列出、也删不掉。
 
-### 4.6 或者直接从 Docker Hub 拉（可选）
+### 4.6 云编译下载
 
-镜像已经发布到 Docker Hub，是个多架构清单，路由器会自动选 arm64：
-
-```sh
-docker pull 14854/tiez-share:0.1.0     # 也可用 :latest
-```
-
-这样 `compose.yaml` 里的 `image:` 可以从 `tiez-share:arm64` 换成 `14854/tiez-share:0.1.0`，
-以后升级就是 `docker compose pull && docker compose up -d`，不用再传 tar 包。
-怎么自己重新推见第 11 节。
+无需本地构建，可以从 GitHub Actions 下载对应架构的镜像包，导入后按上面的步骤启动，详见第 11 节。
 
 ---
 
@@ -287,18 +279,14 @@ BASE=http://192.168.1.2:12345 node tests/smoke.mjs
 
 ```
 tiez-share/
+├── .github/workflows/build-images.yml # ARM64 / AMD64 云编译与自检
 ├── Cargo.toml / Cargo.lock
 ├── Dockerfile              # 默认产出 linux/arm64
 ├── docker-compose.yml      # iStoreOS 部署用
 ├── build-image.ps1         # Windows 构建/导出脚本
 ├── build-image.sh          # Linux/macOS 构建/导出脚本
-├── push-dockerhub.ps1      # 推送到 Docker Hub（产出多架构清单）
-├── tiez-share-arm64.tar    # docker save 产物，scp 到路由器 docker load 即可
-├── tiez-share-aarch64      # 同一镜像抽出的静态二进制（不走 Docker 的备选方案）
 ├── openwrt/
 │   └── tiez-share.init     # OpenWrt procd 启动脚本
-├── tools/
-│   └── proxy-auth.mjs      # 推送时用的本地认证注入代理（见第 11 节）
 ├── LICENSE                 # GPL-3.0（继承自上游）
 ├── tests/
 │   └── smoke.mjs           # 零依赖端到端自检
