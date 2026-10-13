@@ -93,7 +93,7 @@ fn load_config() -> Config {
         color_mode,
         title: env_str("TIEZ_TITLE", "局域网聊天室"),
         logo: env_str("TIEZ_LOGO", DEFAULT_LOGO),
-        join_notice: env_bool("TIEZ_JOIN_NOTICE", true),
+        join_notice: env_bool("TIEZ_JOIN_NOTICE", false),
     }
 }
 

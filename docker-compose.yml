@@ -34,8 +34,8 @@ services:
       TIEZ_COLOR_MODE: "system"
       # 保留多少条聊天记录（每条都写盘，路由器 flash 小就别开太大）
       TIEZ_MAX_HISTORY: "1000"
-      # 有人连接/断开时在聊天室里提示一下
-      TIEZ_JOIN_NOTICE: "1"
+      # 加入/离开提醒默认关闭
+      TIEZ_JOIN_NOTICE: "0"
 
     volumes:
       # 一定要挂到外置盘：/data 里会堆积所有中转文件，

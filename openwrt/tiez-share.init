@@ -27,7 +27,7 @@ PORT=12345
 TITLE="局域网聊天室"
 THEME=mica                 # sticky-note | paper | mica | acrylic
 MAX_HISTORY=1000
-JOIN_NOTICE=1
+JOIN_NOTICE=0
 # --------------------------
 
 start_service() {

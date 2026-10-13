@@ -353,9 +353,16 @@ const badDel = await fetch(`${BASE}/files/deadbeefdeadbeef`, {
 check("删除未知 token 返回 404", badDel.status === 404, `status=${badDel.status}`);
 
 // ------------------------------------------------------------------ 清理连接
-A.ws.close();
 B.ws.close();
 await new Promise((r) => setTimeout(r, 300));
+if (process.env.EXPECT_JOIN_NOTICE !== "1") {
+  check(
+    "默认不发送访客加入/离开提醒",
+    !A.inbox.some((m) => m.msg_type === "notice") &&
+      !B.inbox.some((m) => m.msg_type === "notice")
+  );
+}
+A.ws.close();
 const afterClose = await pollAll();
 check("断开连接后聊天记录仍在", afterClose.length >= history.length);
 

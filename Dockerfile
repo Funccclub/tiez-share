@@ -59,7 +59,7 @@ ENV TIEZ_PORT=12345 \
     TIEZ_THEME=mica \
     TIEZ_COLOR_MODE=system \
     TIEZ_TITLE=局域网聊天室 \
-    TIEZ_JOIN_NOTICE=1
+    TIEZ_JOIN_NOTICE=0
 
 VOLUME ["/data"]
 EXPOSE 12345
