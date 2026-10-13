@@ -1,0 +1,90 @@
+name: Build Docker images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore: ['**.md', 'LICENSE']
+  pull_request:
+    paths-ignore: ['**.md', 'LICENSE']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            platform: linux/arm64
+            cross_image: aarch64-musl
+            target: aarch64-unknown-linux-musl
+          - arch: amd64
+            platform: linux/amd64
+            cross_image: x86_64-musl
+            target: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.arch == 'arm64'
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: tiez-share:${{ matrix.arch }}
+          build-args: |
+            MUSL_CROSS_IMAGE=messense/rust-musl-cross:${{ matrix.cross_image }}
+            RUST_TARGET=${{ matrix.target }}
+            RUNTIME_PLATFORM=${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          provenance: false
+          sbom: false
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke --platform ${{ matrix.platform }} -p 12345:12345 tiez-share:${{ matrix.arch }}
+          ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:12345/healthz; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = 1
+          node tests/smoke.mjs
+      - name: Container logs
+        if: always()
+        run: docker logs smoke || true
+      - name: Export image and standalone binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          docker save tiez-share:${{ matrix.arch }} | gzip > dist/tiez-share-${{ matrix.arch }}.tar.gz
+          docker cp smoke:/usr/local/bin/tiez-share dist/tiez-share-${{ matrix.arch }}
+          cd dist
+          sha256sum * > SHA256SUMS
+      - name: Upload downloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiez-share-${{ matrix.arch }}
+          path: dist/
+          retention-days: 30
+          if-no-files-found: error

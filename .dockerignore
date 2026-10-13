@@ -1,11 +1,7 @@
-# 构建上下文瘦身：只留 Cargo.toml + src/
-target/
-.git/
-.gitignore
-*.md
-docs/
-docker-compose.yml
-Dockerfile*
-build.ps1
-build.sh
-LICENSE
+*
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!Dockerfile
+!.dockerignore

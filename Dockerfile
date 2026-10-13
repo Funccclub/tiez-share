@@ -29,7 +29,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
- && cargo build --release --target ${RUST_TARGET} \
+ && cargo build --locked --release --target ${RUST_TARGET} \
  && rm -rf src
 
 COPY src ./src
@@ -37,7 +37,7 @@ COPY src ./src
 # 依赖层里桩编译的产物还旧，cargo 会误判"无需重编"，打出一个空的桩二进制
 # （现象：容器启动后立刻 exit 0，日志为空）。touch 一下强制重建。
 RUN touch src/*.rs \
- && cargo build --release --target ${RUST_TARGET} \
+ && cargo build --locked --release --target ${RUST_TARGET} \
  && cp target/${RUST_TARGET}/release/tiez-share /tiez-share \
  && ls -lh /tiez-share
 
@@ -47,7 +47,7 @@ FROM --platform=${RUNTIME_PLATFORM} alpine:3.20
 LABEL org.opencontainers.image.title="TieZ Share" \
       org.opencontainers.image.description="独立运行的局域网文件中转 / 聊天室服务（提取自 jimuzhe/tiez-clipboard）" \
       org.opencontainers.image.licenses="GPL-3.0" \
-      org.opencontainers.image.source="https://github.com/jimuzhe/tiez-clipboard"
+      org.opencontainers.image.source="https://github.com/Funccclub/tiez-share"
 
 # 静态 musl 二进制，不依赖镜像内的 libc
 COPY --from=builder /tiez-share /usr/local/bin/tiez-share

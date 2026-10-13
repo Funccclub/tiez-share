@@ -314,13 +314,13 @@ tiez-share/
 
 ## 10. 附：不走 Docker 的备选方案（OpenWrt 原生服务）
 
-`tiez-share-aarch64` 是从同一个镜像里抽出来的**静态链接**二进制（1.4 MB，
+云编译产物里的 `tiez-share-arm64` 是从同一个镜像里抽出来的**静态链接**二进制（1.4 MB，
 `ELF 64-bit ARM aarch64, statically linked, stripped`），不依赖 OpenWrt 的任何库。
 万一你的路由器上 Docker 版本太老、`docker load` 不认这个包，可以直接当原生服务跑：
 
 ```sh
 # 电脑上
-scp tiez-share-aarch64      root@192.168.1.2:/usr/bin/tiez-share
+scp tiez-share-arm64        root@192.168.1.2:/usr/bin/tiez-share
 scp openwrt/tiez-share.init root@192.168.1.2:/etc/init.d/tiez-share
 
 # 路由器上
@@ -336,134 +336,37 @@ logread -e tiez-share -f          # 看启动日志
 
 ---
 
-## 11. 发布到 Docker Hub（可选）
+## 11. GitHub Actions 云编译（树莓派 / x86）
 
-### 11.1 已经发好的镜像
+打开 [Actions](https://github.com/Funccclub/tiez-share/actions/workflows/build-images.yml)，选择 **Run workflow** 即可手动构建。推送代码到 `main` 或创建 `v*` 标签也会自动构建；只修改文档不会触发。
 
-```sh
-docker pull 14854/tiez-share:0.1.0          # 或 :latest
-docker pull 14854/tiez-share:0.1.0-arm64    # 只要某一个架构时
-```
+两套镜像分别编译，并启动容器运行 `tests/smoke.mjs` 自检。ARM64 编译使用交叉工具链，运行自检时使用 QEMU。无需 Docker Hub 账号、密码或额外 Secrets。
 
-`:0.1.0` 和 `:latest` 是 manifest list，同时包含 `linux/amd64` 与 `linux/arm64`，
-`docker pull` 会按机器架构自动选，所以同一个标签在 x86 电脑和 ARM 路由器上都能用。
+| 下载产物 | 对应设备 | 镜像标签 |
+|---|---|---|
+| `tiez-share-arm64` | 树莓派 3/4/5 等运行 64 位系统的设备、ARM64 软路由 | `tiez-share:arm64` |
+| `tiez-share-amd64` | x86_64 电脑、NAS、软路由 | `tiez-share:amd64` |
 
-### 11.2 自己重新推
+不包含 32 位 ARM 系统或 32 位 x86 的镜像。
 
-先按第 3 节构建出两个架构的本地镜像，然后：
-
-```powershell
-.\push-dockerhub.ps1 -Username 你的用户名 -Version 0.1.0
-```
-
-脚本流程：检查两个架构的镜像 → `docker login` → 分别推 `:版本-amd64` / `:版本-arm64`
-→ 用 `docker buildx imagetools create` 合成 `:版本` 和 `:latest` 多架构清单 → 打印清单做验证。
-
-登录建议用 Access Token（Docker Hub → 右上角头像 → Account settings → Personal access tokens
-→ Generate new token，权限选 **Read & Write**），推完可以在后台直接删掉。
-
-> 小提示：`docker push` 的进度输出走 stderr，PowerShell 会把它显示成红色的 NativeCommandError，
-> 脚本结束时也可能返回非零退出码——只要输出里能看到 `Pushed` 和 digest，就是成功了。
-
-### 11.3 国内网络：推送必须走代理，而加速器帮不上
-
-镜像加速器（`daemon.json` 的 registry-mirrors）只代理**拉取**，推送一律直连
-`registry-1.docker.io` 和上传主机 `*.cloudflare.docker.com`。国内典型现象是：
-
-- `registry-1.docker.io` 被 DNS 污染，解析到不相干的 IP（实测见过 `199.59.148.229`、`162.125.32.2`）；
-- 直连全部超时，但**拉取因为走加速器一切正常**，很容易误以为网络没问题。
-
-解决办法是给 Docker Desktop 配一个能出网的代理，但有两个坑：
-
-**坑 1：Docker Desktop 不允许代理地址里带用户名密码。** 直接填
-`http://用户名:密码@主机:端口`，后端会启动即崩溃：
-
-```
-loading/formatting settings-store.json: invalid http proxy in user settings: must not include credentials
-```
-
-症状是"Docker Desktop 起不来"，且只在启动时出现一次。两种绕法：在 GUI 里让它弹框输入凭据
-（会存进 Windows 凭据管理器），或者用本项目的 `tools/proxy-auth.mjs`——本地开一个不要求
-认证的代理，转发时自动补上上游凭据。
-
-**坑 2：改 `settings-store.json` 之前必须先退出 Docker Desktop。** 它退出时会覆写这个文件，
-你的改动会丢。另外**不要删掉文件里原有的键**，尤其 `UseContainerdSnapshotter`：少了它
-Docker Desktop 会切换镜像存储，之前加载的镜像会集体"消失"（实际没丢，把键加回去重启就复原了）。
-
-完整步骤（Windows + Docker Desktop，实测可用）：
-
-```powershell
-# 1) 起本地认证注入代理（上游地址和凭据换成你自己的）
-$env:UPSTREAM = "192.168.8.100:7893"; $env:UPSTREAM_AUTH = "用户名:密码"
-node tools\proxy-auth.mjs 7899
-
-# 2) 退出 Docker Desktop（这步不能省）
-docker desktop stop
-
-# 3) 编辑 %APPDATA%\Docker\settings-store.json，加入四项（不要删原有键）
-#    "ProxyHttpMode": "manual",
-#    "OverrideProxyHTTP": "http://127.0.0.1:7899",
-#    "OverrideProxyHTTPS": "http://127.0.0.1:7899",
-#    "OverrideProxyExclude": "localhost,127.0.0.1"
-
-# 4) 启动 Docker Desktop 并推送
-docker desktop start
-.\push-dockerhub.ps1 -Username 你的用户名 -Proxy http://127.0.0.1:7899
-```
-
-**推完记得把第 3 步那四项删掉、重启 Docker Desktop**：本地注入代理一停，
-所有出网（连同走加速器的拉取）都会失败。
-
-### 11.4 推完怎么确认
+成功运行页面底部的 **Artifacts** 可下载 ZIP（需登录 GitHub），保留 30 天。解压后包含镜像 `tar.gz`、静态二进制和 `SHA256SUMS`。它们是应用容器镜像，不是树莓派系统刷机镜像。
 
 ```sh
-docker buildx imagetools inspect 14854/tiez-share:latest
+# 树莓派 / ARM64
+sha256sum -c SHA256SUMS
+docker load -i tiez-share-arm64.tar.gz
+
+# x86_64 则导入 tiez-share-amd64.tar.gz
+# 然后启动（按设备修改数据目录，x86_64 改用 tiez-share:amd64）
+docker run -d --name tiez-share --restart unless-stopped \
+  -p 12345:12345 \
+  -v /mnt/sda1/tiez-share:/data \
+  tiez-share:arm64
 ```
 
-输出里 `MediaType` 是 `application/vnd.docker.distribution.manifest.list.v2+json`，
-且能看到 `linux/amd64` 和 `linux/arm64` 两条，就说明多架构清单没问题。
-也可以直接在路由器上拉一次，拉下来的镜像 ID 应该和本机 `tiez-share:arm64` 那个一致。
+使用 Compose 时，默认引用本地已导入的 `tiez-share:arm64`；x86_64 修改 `image` 为 `tiez-share:amd64`。镜像不会自动发布到 Docker Hub 或 GHCR。
 
-公开分发镜像别忘了 GPL-3.0 的源码义务，见下一节。
-
-### 11.5 管理 Hub 上的镜像（列标签 / 清理旧版本）
-
-推送久了 Hub 上会堆一批历史版本。`hub-images.ps1` 用来查看和清理：
-
-```powershell
-# 列出所有标签（公开仓库匿名可读，不需要凭据）
-.\hub-images.ps1
-
-# 只保留最新 3 个版本，先干跑看要删什么（干跑不需要凭据）
-.\hub-images.ps1 -Prune -Keep 3 -DryRun
-
-# 确认无误后真删（会要求输入 yes）
-.\hub-images.ps1 -Prune -Keep 3
-
-# 删指定标签
-.\hub-images.ps1 -Delete 0.0.9,0.0.9-arm64
-```
-
-用户名默认已填 `14854`，仓库名默认 `tiez-share`，日常不用带参数。
-
-**保留规则**：只有能解析成 `主.次.补丁` 的标签参与版本排序，`latest` 这类非版本标签
-永不删除。删掉某个版本时，它的 `-amd64` / `-arm64` 架构标签会一起删掉。
-
-**删除需要 Access Token**：在 <https://hub.docker.com/settings/security> 新建一个，
-权限勾 **Read & Delete**。注意是 token 不是登录密码——账号开了 2FA 的话密码登录一定失败。
-两种给法：
-
-```powershell
-$env:DOCKERHUB_TOKEN = "dckr_pat_xxx"   # 推荐，只在本会话有效
-.\hub-images.ps1 -Prune -Keep 3
-```
-
-不加参数时脚本会安全提示输入（不回显）。在 CI 之类非交互环境下会直接报错而不是卡住。
-
-**网络**：这点和推送不一样——管理镜像只走 HTTP API，**不需要**改 Docker Desktop 的
-`settings-store.json`，也不需要重启 Docker Desktop。只要第 11.3 节那个
-`tools\proxy-auth.mjs` 代理在跑就行；脚本会自己检测，没开会告诉你怎么启动。
-若你在墙外，加 `-NoProxy`。
+独立二进制也可以配合 `openwrt/tiez-share.init` 原生运行：ARM64 下载包中的 `tiez-share-arm64` 即为第 10 节使用的二进制，复制时将它重命名为 `tiez-share`。
 
 ---
 

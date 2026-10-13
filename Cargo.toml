@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "TieZ Share - standalone LAN file transfer & chat relay extracted from jimuzhe/tiez-clipboard"
 license = "GPL-3.0"
-repository = "https://github.com/jimuzhe/tiez-clipboard"
+repository = "https://github.com/Funccclub/tiez-share"
 default-run = "tiez-share"
 
 [dependencies]
