@@ -22,6 +22,7 @@ ARG RUNTIME_PLATFORM=linux/arm64
 FROM --platform=$BUILDPLATFORM ${MUSL_CROSS_IMAGE} AS builder
 
 ARG RUST_TARGET
+ARG RUN_TESTS=0
 WORKDIR /app
 
 # 先只拷贝清单（含 Cargo.lock，保证依赖版本可复现）并用桩文件编译，
@@ -37,6 +38,7 @@ COPY src ./src
 # 依赖层里桩编译的产物还旧，cargo 会误判"无需重编"，打出一个空的桩二进制
 # （现象：容器启动后立刻 exit 0，日志为空）。touch 一下强制重建。
 RUN touch src/*.rs \
+ && if [ "$RUN_TESTS" = 1 ]; then cargo test --locked --release --target ${RUST_TARGET}; fi \
  && cargo build --locked --release --target ${RUST_TARGET} \
  && cp target/${RUST_TARGET}/release/tiez-share /tiez-share \
  && ls -lh /tiez-share

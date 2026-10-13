@@ -19,9 +19,8 @@ services:
     container_name: tiez-share
     restart: unless-stopped
 
-    ports:
-      # 左边是路由器上对外暴露的端口，冲突就改成别的（例如 18080:12345）
-      - "12345:12345"
+    # Linux/iStoreOS：使用宿主机网段，保留客户端真实来源。
+    network_mode: host
 
     environment:
       TIEZ_PORT: "12345"
@@ -36,6 +35,13 @@ services:
       TIEZ_MAX_HISTORY: "1000"
       # 加入/离开提醒默认关闭
       TIEZ_JOIN_NOTICE: "0"
+      # 空值自动检测直连网段；多网段时可明确填写，例如 192.168.8.0/24
+      TIEZ_LAN_CIDRS: ""
+      TIEZ_MAX_FILE_BYTES: "2147483648"
+      TIEZ_MAX_STORAGE_BYTES: "10737418240"
+      TIEZ_FILE_TTL_SECS: "604800"
+      TIEZ_UPLOAD_TTL_SECS: "3600"
+      TIEZ_CLEANUP_INTERVAL_SECS: "60"
 
     volumes:
       # 一定要挂到外置盘：/data 里会堆积所有中转文件，

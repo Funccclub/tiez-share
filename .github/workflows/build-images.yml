@@ -50,6 +50,7 @@ jobs:
             MUSL_CROSS_IMAGE=messense/rust-musl-cross:${{ matrix.cross_image }}
             RUST_TARGET=${{ matrix.target }}
             RUNTIME_PLATFORM=${{ matrix.platform }}
+            RUN_TESTS=1
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           provenance: false
@@ -58,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run -d --name smoke --platform ${{ matrix.platform }} -p 12345:12345 tiez-share:${{ matrix.arch }}
+          docker run -d --name smoke --network host --platform ${{ matrix.platform }} tiez-share:${{ matrix.arch }}
           ready=0
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:12345/healthz; then
@@ -69,6 +70,7 @@ jobs:
           done
           test "$ready" = 1
           node tests/smoke.mjs
+          node tests/retention.mjs tiez-share:${{ matrix.arch }}
       - name: Container logs
         if: always()
         run: docker logs smoke || true

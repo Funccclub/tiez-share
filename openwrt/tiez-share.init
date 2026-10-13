@@ -28,6 +28,9 @@ TITLE="局域网聊天室"
 THEME=mica                 # sticky-note | paper | mica | acrylic
 MAX_HISTORY=1000
 JOIN_NOTICE=0
+LAN_CIDRS="" # 自动检测；也可填 192.168.8.0/24
+FILE_TTL_SECS=604800
+MAX_STORAGE_BYTES=10737418240
 # --------------------------
 
 start_service() {
@@ -50,7 +53,10 @@ start_service() {
         TIEZ_TITLE="$TITLE" \
         TIEZ_THEME="$THEME" \
         TIEZ_MAX_HISTORY="$MAX_HISTORY" \
-        TIEZ_JOIN_NOTICE="$JOIN_NOTICE"
+        TIEZ_JOIN_NOTICE="$JOIN_NOTICE" \
+        TIEZ_LAN_CIDRS="$LAN_CIDRS" \
+        TIEZ_FILE_TTL_SECS="$FILE_TTL_SECS" \
+        TIEZ_MAX_STORAGE_BYTES="$MAX_STORAGE_BYTES"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1

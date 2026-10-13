@@ -80,7 +80,7 @@ impl Default for ReceiveText {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 #[serde(default)]
 pub struct ChunkMetadata {
     pub upload_id: String,
@@ -91,6 +91,8 @@ pub struct ChunkMetadata {
     pub sender_name: String,
     pub total_size: u64,
     pub content_type: Option<String>,
+    pub chunk_sha256: Option<String>,
+    pub file_sha256: Option<String>,
 }
 
 impl Default for ChunkMetadata {
@@ -104,6 +106,8 @@ impl Default for ChunkMetadata {
             sender_name: String::new(),
             total_size: 0,
             content_type: None,
+            chunk_sha256: None,
+            file_sha256: None,
         }
     }
 }
@@ -130,6 +134,21 @@ pub struct Config {
     pub logo: String,
     /// Broadcast join/leave notices to connected clients.
     pub join_notice: bool,
+    pub max_file_bytes: u64,
+    pub max_storage_bytes: u64,
+    pub file_ttl_secs: u64,
+    pub upload_ttl_secs: u64,
+    pub cleanup_interval_secs: u64,
+    pub lan_networks: Vec<crate::network::Network>,
+}
+
+pub struct UploadSession {
+    pub meta: ChunkMetadata,
+    pub path: PathBuf,
+    pub chunks: Vec<(usize, String)>,
+    pub bytes: u64,
+    pub updated: i64,
+    pub completed: bool,
 }
 
 /// Everything guarded by one mutex: this is a low-traffic LAN relay.
@@ -141,13 +160,16 @@ pub struct Inner {
     /// links keep working across restarts.
     pub tokens: HashMap<String, String>,
     /// upload_id -> temp file path for chunked uploads.
-    pub uploads: HashMap<String, PathBuf>,
+    pub uploads: HashMap<String, UploadSession>,
+    pub managed_files: HashMap<String, i64>,
 }
 
 pub struct AppState {
     pub cfg: Config,
     pub inner: Mutex<Inner>,
     pub ws_tx: broadcast::Sender<String>,
+    pub file_ops: tokio::sync::Mutex<()>,
+    pub history_ops: Mutex<()>,
 }
 
 impl AppState {

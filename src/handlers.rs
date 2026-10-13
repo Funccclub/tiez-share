@@ -196,166 +196,206 @@ pub async fn upload(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> axum::response::Response {
-    let mut sender_id = String::new();
-    let mut sender_name = String::new();
-    let mut success = false;
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or("").to_string();
-
-        if name == "sender_id" {
-            if let Ok(val) = field.text().await {
-                sender_id = val;
-            }
-            continue;
-        }
-        if name == "sender_name" {
-            if let Ok(val) = field.text().await {
-                sender_name = val;
-            }
-            continue;
-        }
-
-        if name == "file" {
-            let file_name = sanitize_filename(field.file_name().unwrap_or("unknown.bin"));
-            let content_type = field
-                .content_type()
-                .unwrap_or("application/octet-stream")
-                .to_string();
-
-            let save_dir = state.cfg.data_dir.clone();
-            if !save_dir.exists() {
-                let _ = std::fs::create_dir_all(&save_dir);
-            }
-            let target_path = save_dir.join(format!("{}_{}", now_millis(), file_name));
-
-            match File::create(&target_path).await {
-                Ok(mut file) => {
-                    let mut stream = field;
-                    let mut write_ok = true;
-                    while let Some(Ok(chunk)) = stream.next().await {
-                        if let Err(e) = file.write_all(&chunk).await {
-                            eprintln!("[tiez-share] write error: {}", e);
-                            write_ok = false;
-                            break;
-                        }
+    let _guard = state.file_ops.lock().await;
+    let temp = state.cfg.data_dir.join(format!(".tmp_tiez_{}", unique_suffix()));
+    let result = async {
+        let mut sender_id = String::new();
+        let mut sender_name = String::new();
+        let mut uploaded = None;
+        loop {
+            let field = tokio::time::timeout(std::time::Duration::from_secs(30), multipart.next_field())
+                .await.map_err(|_| (StatusCode::REQUEST_TIMEOUT, "Upload timed out"))?
+                .map_err(|_| (StatusCode::BAD_REQUEST, "Incomplete multipart upload"))?;
+            let Some(mut field) = field else { break; };
+            match field.name().unwrap_or("") {
+                "sender_id" | "sender_name" => {
+                    let id = field.name() == Some("sender_id");
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = field.chunk().await.map_err(|_| (StatusCode::BAD_REQUEST, "Invalid field"))? {
+                        if bytes.len() + chunk.len() > 1024 { return Err((StatusCode::BAD_REQUEST, "Field too long")); }
+                        bytes.extend_from_slice(&chunk);
                     }
-                    if write_ok {
-                        let _ = file.flush().await;
-                        register_received_file(
-                            &state,
-                            &target_path,
-                            content_type,
-                            &sender_id,
-                            &sender_name,
-                        );
-                        success = true;
-                    }
+                    let text = String::from_utf8(bytes).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid field"))?;
+                    if id { sender_id = text; } else { sender_name = text; }
                 }
-                Err(e) => eprintln!("[tiez-share] cannot create upload target: {}", e),
+                "file" => {
+                    if uploaded.is_some() { return Err((StatusCode::BAD_REQUEST, "One file per request")); }
+                    let name = sanitize_filename(field.file_name().unwrap_or("unknown.bin"));
+                    let mime = field.content_type().unwrap_or("application/octet-stream").to_string();
+                    let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&temp).await
+                        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Cannot create upload"))?;
+                    let mut size = 0u64;
+                    loop {
+                        let chunk = tokio::time::timeout(std::time::Duration::from_secs(30), field.chunk())
+                            .await.map_err(|_| (StatusCode::REQUEST_TIMEOUT, "Upload timed out"))?
+                            .map_err(|_| (StatusCode::BAD_REQUEST, "Incomplete file"))?;
+                        let Some(chunk) = chunk else { break; };
+                        size = size.checked_add(chunk.len() as u64).ok_or((StatusCode::PAYLOAD_TOO_LARGE, "File too large"))?;
+                        if state.cfg.max_file_bytes > 0 && size > state.cfg.max_file_bytes {
+                            return Err((StatusCode::PAYLOAD_TOO_LARGE, "File too large"));
+                        }
+                        if !crate::maintenance::cleanup(&state, chunk.len() as u64) {
+                            return Err((StatusCode::INSUFFICIENT_STORAGE, "Storage limit reached"));
+                        }
+                        file.write_all(&chunk).await.map_err(|_| (StatusCode::INSUFFICIENT_STORAGE, "Write failed"))?;
+                    }
+                    file.sync_all().await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Flush failed"))?;
+                    uploaded = Some((name, mime));
+                }
+                _ => return Err((StatusCode::BAD_REQUEST, "Unknown field")),
             }
         }
-    }
-
-    if success {
-        (StatusCode::OK, "Upload successful").into_response()
-    } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, "Upload failed").into_response()
+        let (name, mime) = uploaded.ok_or((StatusCode::BAD_REQUEST, "Missing file"))?;
+        let final_path = state.cfg.data_dir.join(format!("{}_{}_{}", now_millis(), unique_suffix(), name));
+        tokio::fs::rename(&temp, &final_path).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Finalize failed"))?;
+        crate::maintenance::record_file(&state, &final_path).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "File index failed"))?;
+        register_received_file(&state, &final_path, mime, &sender_id, &sender_name);
+        Ok::<_, (StatusCode, &'static str)>(())
+    }.await;
+    let _ = tokio::fs::remove_file(&temp).await;
+    match result {
+        Ok(()) => (StatusCode::OK, "Upload successful").into_response(),
+        Err(error) => error.into_response(),
     }
 }
 
-/// `POST /upload_chunk` and `POST /upload-chunk` - chunked/resumable upload.
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!("{:x}-{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(), COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Sequential, idempotent chunk upload. Only matching retries are accepted.
 pub async fn upload_chunk(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> axum::response::Response {
     let mut metadata: Option<ChunkMetadata> = None;
-    let mut chunk_data: Option<Vec<u8>> = None;
-
-    while let Ok(Some(field)) = multipart.next_field().await {
+    let mut data = None;
+    loop {
+        let field = match tokio::time::timeout(std::time::Duration::from_secs(30), multipart.next_field()).await {
+            Ok(Ok(field)) => field,
+            Ok(Err(_)) => return (StatusCode::BAD_REQUEST, "Invalid multipart upload").into_response(),
+            Err(_) => return (StatusCode::REQUEST_TIMEOUT, "Upload timed out").into_response(),
+        };
+        let Some(field) = field else { break; };
         let name = field.name().unwrap_or("").to_string();
-        if name == "metadata" {
-            if let Ok(bytes) = field.bytes().await {
-                if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                    if let Ok(m) = serde_json::from_str(&text) {
-                        metadata = Some(m);
-                    }
+        let bytes = match tokio::time::timeout(std::time::Duration::from_secs(30), field.bytes()).await {
+            Ok(Ok(bytes)) => bytes,
+            _ => return (StatusCode::BAD_REQUEST, "Incomplete chunk").into_response(),
+        };
+        if name == "metadata" && bytes.len() > 16 * 1024 {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "Metadata too large").into_response();
+        }
+        if name == "metadata" && metadata.is_none() {
+            metadata = serde_json::from_slice(&bytes).ok();
+            if metadata.is_none() { return (StatusCode::BAD_REQUEST, "Invalid metadata").into_response(); }
+        } else if (name == "data" || name == "file") && data.is_none() { data = Some(bytes); }
+        else { return (StatusCode::BAD_REQUEST, "Unexpected field").into_response(); }
+    }
+    let (Some(mut meta), Some(data)) = (metadata, data) else {
+        return (StatusCode::BAD_REQUEST, "Missing metadata or chunk").into_response();
+    };
+    if meta.upload_id.is_empty() || meta.upload_id.len() > 64 || sanitize_id(&meta.upload_id) != meta.upload_id ||
+        meta.total_chunks == 0 || meta.total_chunks > 65536 || meta.chunk_index >= meta.total_chunks {
+        return (StatusCode::BAD_REQUEST, "Invalid upload id or chunk index").into_response();
+    }
+    if state.cfg.max_file_bytes > 0 && meta.total_size > state.cfg.max_file_bytes {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "File too large").into_response();
+    }
+    if data.len() > 1024 * 1024 {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "Chunk exceeds 1 MiB").into_response();
+    }
+    if state.cfg.max_storage_bytes > 0 && meta.total_size > state.cfg.max_storage_bytes {
+        return (StatusCode::INSUFFICIENT_STORAGE, "File exceeds storage quota").into_response();
+    }
+    use sha2::{Digest, Sha256};
+    let hash = format!("{:x}", Sha256::digest(&data));
+    if meta.chunk_sha256.as_ref().is_some_and(|expected| !expected.eq_ignore_ascii_case(&hash)) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "Chunk checksum mismatch").into_response();
+    }
+    let index = meta.chunk_index;
+    meta.chunk_index = 0;
+    meta.chunk_sha256 = None;
+    // Avoid browser/user id collisions without altering the public protocol.
+    let key = format!("{}:{}", sanitize_id(&meta.sender_id), meta.upload_id);
+    let _guard = state.file_ops.lock().await;
+    crate::maintenance::cleanup(&state, 0);
+    let existing = state.lock().uploads.remove(&key);
+    if existing.is_none() && state.lock().uploads.len() >= 1024 {
+        return (StatusCode::TOO_MANY_REQUESTS, "Too many upload sessions").into_response();
+    }
+    let mut session = match existing {
+        Some(session) => session,
+        None if index == 0 => UploadSession { meta: meta.clone(),
+            path: state.cfg.data_dir.join(format!(".tmp_tiez_{}", unique_suffix())),
+            chunks: Vec::new(), bytes: 0, updated: now_millis(), completed: false },
+        None => return (StatusCode::CONFLICT, "Upload must start at chunk zero").into_response(),
+    };
+    let result = async {
+        if session.meta != meta { return Err((StatusCode::CONFLICT, "Upload metadata changed")); }
+        if index < session.chunks.len() {
+            if session.chunks[index] != (data.len(), hash.clone()) {
+                return Err((StatusCode::CONFLICT, "Retry content differs"));
+            }
+            if session.completed && !session.path.is_file() {
+                return Err((StatusCode::GONE, "Completed file has expired"));
+            }
+            session.updated = now_millis();
+            return Ok(());
+        }
+        if session.completed || index != session.chunks.len() {
+            return Err((StatusCode::CONFLICT, "Out of order chunk"));
+        }
+        if session.bytes > 0 && !session.path.is_file() {
+            return Err((StatusCode::GONE, "Partial upload is no longer available; start a new upload"));
+        }
+        let size = session.bytes.checked_add(data.len() as u64).ok_or((StatusCode::PAYLOAD_TOO_LARGE, "File too large"))?;
+        let final_chunk = index + 1 == meta.total_chunks;
+        if size > meta.total_size || (final_chunk && size != meta.total_size) || (!final_chunk && (data.is_empty() || size >= meta.total_size)) {
+            return Err((StatusCode::UNPROCESSABLE_ENTITY, "File size mismatch"));
+        }
+        if !crate::maintenance::cleanup(&state, data.len() as u64) {
+            return Err((StatusCode::INSUFFICIENT_STORAGE, "Storage limit reached"));
+        }
+        let mut file = tokio::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&session.path).await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Cannot open partial upload"))?;
+        // If the previous write was interrupted, discard any unacknowledged tail.
+        file.set_len(session.bytes).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Cannot recover upload"))?;
+        file.seek(SeekFrom::Start(session.bytes)).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Seek failed"))?;
+        file.write_all(&data).await.map_err(|_| (StatusCode::INSUFFICIENT_STORAGE, "Write failed"))?;
+        file.sync_all().await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Flush failed"))?;
+        drop(file);
+        if final_chunk {
+            if let Some(expected) = &meta.file_sha256 {
+                let mut file = File::open(&session.path).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Checksum read failed"))?;
+                let mut hasher = Sha256::new();
+                let mut buffer = vec![0; 64 * 1024];
+                loop {
+                    let n = file.read(&mut buffer).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Checksum read failed"))?;
+                    if n == 0 { break; }
+                    hasher.update(&buffer[..n]);
+                }
+                if !expected.eq_ignore_ascii_case(&format!("{:x}", hasher.finalize())) {
+                    return Err((StatusCode::UNPROCESSABLE_ENTITY, "File checksum mismatch"));
                 }
             }
-        } else if name == "data" || name == "file" {
-            if let Ok(bytes) = field.bytes().await {
-                chunk_data = Some(bytes.to_vec());
+            let final_path = state.cfg.data_dir.join(format!("{}_{}_{}", now_millis(), unique_suffix(), sanitize_filename(&meta.file_name)));
+            tokio::fs::rename(&session.path, &final_path).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Finalize failed"))?;
+            if crate::maintenance::record_file(&state, &final_path).is_err() {
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "File index failed"));
             }
+            session.path = final_path;
+            session.completed = true;
+            register_received_file(&state, &session.path, meta.content_type.clone().unwrap_or_else(|| "application/octet-stream".into()), &meta.sender_id, &meta.sender_name);
         }
-    }
-
-    let meta = match metadata {
-        Some(m) => m,
-        None => return (StatusCode::BAD_REQUEST, "Missing metadata").into_response(),
-    };
-    let data = match chunk_data {
-        Some(d) => d,
-        None => return (StatusCode::BAD_REQUEST, "Missing data").into_response(),
-    };
-    if meta.total_chunks == 0 {
-        return (StatusCode::BAD_REQUEST, "Invalid metadata").into_response();
-    }
-
-    let upload_id = sanitize_id(&meta.upload_id);
-    let save_dir = state.cfg.data_dir.clone();
-    if !save_dir.exists() {
-        let _ = std::fs::create_dir_all(&save_dir);
-    }
-
-    let temp_path = {
-        let mut inner = state.lock();
-        inner
-            .uploads
-            .entry(upload_id.clone())
-            .or_insert_with(|| save_dir.join(format!(".tmp_{}", upload_id)))
-            .clone()
-    };
-
-    let mut options = tokio::fs::OpenOptions::new();
-    options.create(true).append(true).write(true);
-    match options.open(&temp_path).await {
-        Ok(mut file) => {
-            if let Err(e) = file.write_all(&data).await {
-                eprintln!("[tiez-share] chunk write failed: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Write failed").into_response();
-            }
-            let _ = file.flush().await;
-        }
-        Err(e) => {
-            eprintln!("[tiez-share] chunk open failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Open failed").into_response();
-        }
-    }
-
-    if meta.chunk_index + 1 >= meta.total_chunks {
-        let final_name = sanitize_filename(&meta.file_name);
-        let final_path = save_dir.join(format!("{}_{}", now_millis(), final_name));
-
-        if let Err(e) = tokio::fs::rename(&temp_path, &final_path).await {
-            eprintln!("[tiez-share] finalize failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Finalize failed").into_response();
-        }
-        state.lock().uploads.remove(&upload_id);
-
-        let content_type = meta
-            .content_type
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-        register_received_file(
-            &state,
-            &final_path,
-            content_type,
-            &meta.sender_id,
-            &meta.sender_name,
-        );
-        return (StatusCode::OK, "Upload complete").into_response();
-    }
-
-    (StatusCode::OK, "Chunk received").into_response()
+        session.chunks.push((data.len(), hash));
+        session.bytes = size;
+        session.updated = now_millis();
+        Ok::<_, (StatusCode, &'static str)>(())
+    }.await;
+    state.lock().uploads.insert(key, session);
+    match result { Ok(()) => (StatusCode::OK, "Chunk accepted").into_response(), Err(e) => e.into_response() }
 }
 
 /// Record an incoming file into the chat stream (and therefore for every other
@@ -444,7 +484,7 @@ pub async fn list_files(State(state): State<Arc<AppState>>) -> impl IntoResponse
     if let Ok(read_dir) = std::fs::read_dir(&dir) {
         for entry in read_dir.flatten() {
             let path = entry.path();
-            if !path.is_file() {
+            if !crate::maintenance::safe_file(&state, &path) {
                 continue;
             }
             let name = match path.file_name() {
@@ -503,6 +543,7 @@ pub async fn delete_file(
     AxumPath(token): AxumPath<String>,
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
+    let _files = state.file_ops.lock().await;
     let path_str = { state.lock().tokens.get(&token).cloned() };
     let path_str = match path_str {
         Some(p) => p,
@@ -528,34 +569,7 @@ pub async fn delete_file(
         return (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed").into_response();
     }
 
-    let (removed_ids, snapshot) = {
-        let mut inner = state.lock();
-        let mut ids: Vec<u64> = Vec::new();
-        inner.messages.retain(|m| {
-            let hit = m.file_path.as_deref() == Some(path_str.as_str());
-            if hit {
-                ids.push(m.id);
-            }
-            !hit
-        });
-        inner.tokens.remove(&token);
-        (ids, inner.messages.clone())
-    };
-    rewrite_history(&state.cfg.history_file, &snapshot);
-
-    println!(
-        "[tiez-share] deleted {} (同时移除 {} 条关联消息)",
-        path_str,
-        removed_ids.len()
-    );
-
-    let _ = state.ws_tx.send(
-        serde_json::json!({
-            "type": "files_changed",
-            "removed_message_ids": removed_ids,
-        })
-        .to_string(),
-    );
+    crate::maintenance::forget_file(&state, &path_str);
 
     (StatusCode::OK, "Deleted").into_response()
 }
@@ -572,6 +586,7 @@ pub fn append_message(
     sender_name: &str,
     file_path: Option<String>,
 ) -> Message {
+    let _history = state.history_ops.lock().unwrap_or_else(|e| e.into_inner());
     let mut final_content = content.to_string();
     if matches!(msg_type, "image" | "video" | "file")
         && !final_content.starts_with("data:")
@@ -632,7 +647,7 @@ pub async fn handle_file_download(
 
     if let Some(path_str) = file_path {
         let path = std::path::PathBuf::from(&path_str);
-        if path.is_file() {
+        if crate::maintenance::safe_file(&state, &path) {
             let filename = path
                 .file_name()
                 .unwrap_or_default()

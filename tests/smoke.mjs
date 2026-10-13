@@ -8,6 +8,9 @@
  *   BASE=http://192.168.1.2:12345 node tests/smoke.mjs
  */
 
+import { createHash, randomBytes } from 'node:crypto';
+import vm from 'node:vm';
+
 const BASE = process.env.BASE || "http://127.0.0.1:12345";
 const WS_URL = BASE.replace(/^http/, "ws") + "/ws";
 
@@ -103,6 +106,13 @@ console.log(`TieZ Share 端到端自检 @ ${BASE}`);
 section("[1] 网页聊天室界面");
 const indexRes = await fetch(`${BASE}/`);
 const html = await indexRes.text();
+const hashSource = html.slice(html.indexOf('class UploadSHA256'), html.indexOf('async function uploadFile'));
+const BrowserHash = vm.runInNewContext(hashSource + '; UploadSHA256');
+for (const size of [0, 1, 55, 56, 63, 64, 65, 1025, 524288]) {
+  const data = randomBytes(size), hash = new BrowserHash();
+  for (let i = 0; i < data.length; i += 37) hash.update(data.subarray(i, i + 37));
+  check(`网页 SHA-256 正确（${size} bytes）`, hash.digest() === createHash('sha256').update(data).digest('hex'));
+}
 check("GET / 返回页面", indexRes.ok && html.includes("<!DOCTYPE html>"));
 check("标题已注入配置项", html.includes("<h1>") && !html.includes("{title}"), "模板占位符没有被替换");
 check("无 Tauri 残留", !html.includes("__TAURI__") && !html.includes("invoke("), "浏览器里 invoke 会直接报错");
@@ -119,6 +129,9 @@ section("[2] 健康检查");
 const health = await (await fetch(`${BASE}/healthz`)).json();
 check("GET /healthz", health.status === "ok", JSON.stringify(health));
 check("报告存储目录", typeof health.data_dir === "string" && health.data_dir.length > 0);
+for (const headers of [{ 'X-Forwarded-For': '192.168.8.2' }, { Forwarded: 'for=127.0.0.1' }, { Origin: 'https://external.example' }]) {
+  check("拒绝代理来源和跨站请求 " + JSON.stringify(headers), (await fetch(`${BASE}/healthz`, { headers })).status === 403);
+}
 
 // ---------------------------------------------------------- 双设备 / 聊天室
 section("[3] 两个设备互相可见（聊天室核心）");
@@ -237,9 +250,20 @@ const meta = (i, total) => ({
   sender_name: "设备A",
   total_size: PAYLOAD.length,
   content_type: "application/octet-stream",
+  file_sha256: createHash('sha256').update(PAYLOAD).digest('hex'),
 });
+check("拒绝从第二片开始上传", await uploadChunk(meta(1, 2), PAYLOAD.slice(half)) === 409);
+check("拒绝错误分片校验和", await uploadChunk({ ...meta(0, 2), chunk_sha256: '0'.repeat(64) }, PAYLOAD.slice(0, half)) === 422);
 const s1 = await uploadChunk(meta(0, 2), PAYLOAD.slice(0, half));
+check("相同分片重试成功且不重复追加", await uploadChunk(meta(0, 2), PAYLOAD.slice(0, half)) === 200);
+check("拒绝内容不同的重复分片", await uploadChunk(meta(0, 2), new Uint8Array(half)) === 409);
+check("拒绝途中修改元数据", await uploadChunk({ ...meta(1, 2), file_name: 'different.bin' }, PAYLOAD.slice(half)) === 409);
+check("拒绝文件总大小不符", await uploadChunk(meta(1, 2), PAYLOAD.slice(half + 1)) === 422);
 const s2 = await uploadChunk(meta(1, 2), PAYLOAD.slice(half));
+check("最后一片重试幂等成功", await uploadChunk(meta(1, 2), PAYLOAD.slice(half)) === 200);
+check("拒绝片号越界", await uploadChunk(meta(2, 2), PAYLOAD) === 400);
+check("拒绝整文件校验失败", await uploadChunk({ ...meta(0, 1), upload_id: uploadId+'-bad', file_sha256: '0'.repeat(64) }, PAYLOAD) === 422);
+check("零字节文件可上传", await uploadChunk({ ...meta(0, 1), upload_id: uploadId+'-empty', file_name: 'empty.bin', total_size: 0, file_sha256: createHash('sha256').digest('hex') }, new Uint8Array()) === 200);
 check("分片 1 返回 200", s1 === 200, `status=${s1}`);
 check("分片 2 返回 200", s2 === 200, `status=${s2}`);
 
@@ -248,6 +272,7 @@ const chunkMsg = [...afterChunk]
   .reverse()
   .find((m) => m.file_path && m.file_path.includes(chunkName));
 check("分片收完后生成文件消息", !!chunkMsg);
+check("最后一片重试不会生成重复消息", afterChunk.filter(m => m.file_path?.includes(chunkName)).length === 1);
 if (chunkMsg) {
   const dl = await download(chunkMsg.content);
   check(

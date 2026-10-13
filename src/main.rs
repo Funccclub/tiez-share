@@ -10,6 +10,8 @@ mod handlers;
 mod models;
 mod store;
 mod web_ui;
+mod network;
+mod maintenance;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -94,6 +96,15 @@ fn load_config() -> Config {
         title: env_str("TIEZ_TITLE", "局域网聊天室"),
         logo: env_str("TIEZ_LOGO", DEFAULT_LOGO),
         join_notice: env_bool("TIEZ_JOIN_NOTICE", false),
+        max_file_bytes: env_parsed("TIEZ_MAX_FILE_BYTES", 2 * 1024 * 1024 * 1024u64),
+        max_storage_bytes: env_parsed("TIEZ_MAX_STORAGE_BYTES", 10 * 1024 * 1024 * 1024u64),
+        file_ttl_secs: env_parsed("TIEZ_FILE_TTL_SECS", 7 * 86400u64),
+        upload_ttl_secs: env_parsed("TIEZ_UPLOAD_TTL_SECS", 3600u64).max(1),
+        cleanup_interval_secs: env_parsed("TIEZ_CLEANUP_INTERVAL_SECS", 60u64).max(1),
+        lan_networks: network::networks().unwrap_or_else(|e| {
+            eprintln!("[tiez-share] invalid TIEZ_LAN_CIDRS: {e}");
+            std::process::exit(1)
+        }),
     }
 }
 
@@ -149,9 +160,14 @@ async fn main() {
             devices: HashMap::new(),
             tokens,
             uploads: HashMap::new(),
+            managed_files: maintenance::load_index(&cfg.data_dir),
         }),
         ws_tx,
+        file_ops: tokio::sync::Mutex::new(()),
+        history_ops: Mutex::new(()),
     });
+    println!("[tiez-share] permitted LAN networks: {:?} (plus loopback)", cfg.lan_networks);
+    tokio::spawn(maintenance::run(state.clone()));
 
     let app = Router::new()
         .route("/", get(handlers::index))
@@ -159,15 +175,16 @@ async fn main() {
         .route("/ws", get(handlers::ws_handler))
         .route("/poll", get(handlers::poll_messages))
         .route("/upload", post(handlers::upload))
-        .route("/upload_chunk", post(handlers::upload_chunk))
-        .route("/upload-chunk", post(handlers::upload_chunk))
+        .route("/upload_chunk", post(handlers::upload_chunk).layer(DefaultBodyLimit::max(2 * 1024 * 1024)))
+        .route("/upload-chunk", post(handlers::upload_chunk).layer(DefaultBodyLimit::max(2 * 1024 * 1024)))
         .route("/send_text", post(handlers::handle_text))
         .route("/send-text", post(handlers::handle_text))
         .route("/download/{token}", get(handlers::handle_file_download))
         .route("/files", get(handlers::list_files))
         .route("/files/{token}", delete(handlers::delete_file))
         .with_state(state.clone())
-        .layer(DefaultBodyLimit::disable());
+        .layer(DefaultBodyLimit::disable())
+        .layer(axum::middleware::from_fn_with_state(state.clone(), network::lan_only));
 
     let addr: SocketAddr = match format!("{}:{}", cfg.bind, cfg.port).parse() {
         Ok(addr) => addr,
@@ -203,7 +220,7 @@ async fn main() {
     println!(" 界面       theme={} title={}", cfg.theme, cfg.title);
     println!("======================================================");
 
-    if let Err(e) = axum::serve(listener, app)
+    if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await
     {

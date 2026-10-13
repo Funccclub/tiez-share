@@ -1277,9 +1277,57 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             }}
         }};
 
+
+        // Incremental SHA-256 also works on plain HTTP LAN pages, where
+        // crypto.subtle is unavailable. Memory use stays at one 512 KiB chunk.
+        class UploadSHA256 {{
+            constructor() {{
+                this.h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+                this.buffer = new Uint8Array(64); this.used = 0; this.length = 0;
+            }}
+            block(bytes) {{
+                const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+                const r = (x,n) => (x >>> n) | (x << (32-n));
+                const w = new Int32Array(64);
+                for(let i=0;i<16;i++) w[i]=(bytes[i*4]<<24)|(bytes[i*4+1]<<16)|(bytes[i*4+2]<<8)|bytes[i*4+3];
+                for(let i=16;i<64;i++) {{
+                    const x=w[i-15],y=w[i-2];
+                    w[i]=(w[i-16]+(r(x,7)^r(x,18)^(x>>>3))+w[i-7]+(r(y,17)^r(y,19)^(y>>>10)))|0;
+                }}
+                let [a,b,c,d,e,f,g,h]=this.h;
+                for(let i=0;i<64;i++) {{
+                    const t1=(h+(r(e,6)^r(e,11)^r(e,25))+((e&f)^(~e&g))+k[i]+w[i])|0;
+                    const t2=((r(a,2)^r(a,13)^r(a,22))+((a&b)^(a&c)^(b&c)))|0;
+                    h=g;g=f;f=e;e=(d+t1)|0;d=c;c=b;b=a;a=(t1+t2)|0;
+                }}
+                [a,b,c,d,e,f,g,h].forEach((v,i)=>this.h[i]=(this.h[i]+v)|0);
+            }}
+            update(bytes) {{
+                this.length += bytes.length;
+                let i=0;
+                if(this.used) {{
+                    const n=Math.min(64-this.used,bytes.length);
+                    this.buffer.set(bytes.subarray(0,n),this.used);this.used+=n;i=n;
+                    if(this.used===64) {{ this.block(this.buffer);this.used=0; }}
+                }}
+                for(;i+64<=bytes.length;i+=64) this.block(bytes.subarray(i,i+64));
+                if(i<bytes.length) {{ this.buffer.set(bytes.subarray(i));this.used=bytes.length-i; }}
+                return this;
+            }}
+            digest() {{
+                const bits=this.length*8;
+                const pad=new Uint8Array(this.used<56?64-this.used:128-this.used);
+                pad[0]=0x80;
+                const view=new DataView(pad.buffer);
+                view.setUint32(pad.length-8,Math.floor(bits/0x100000000));
+                view.setUint32(pad.length-4,bits>>>0);
+                this.update(pad);
+                return this.h.map(v=>(v>>>0).toString(16).padStart(8,'0')).join('');
+            }}
+        }}
+
         async function uploadFile(file) {{
             isUploading = true;
-            let failed = false;
             const isImage = file.type.startsWith('image/');
             const isVideo = file.type.startsWith('video/');
             const msgType = isVideo ? 'video' : (isImage ? 'image' : 'file');
@@ -1290,61 +1338,65 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             addPendingUpload(file.name, el);
             const progressWrapper = document.createElement('div');
             progressWrapper.className = 'progress-wrapper';
-            progressWrapper.innerHTML = `<div style="font-size:10px">0%</div><div class="progress-bar"><div class="progress-inner"></div></div>`;
+            progressWrapper.innerHTML = `<div style="font-size:10px">校验中</div><div class="progress-bar"><div class="progress-inner"></div></div>`;
             el.querySelector('.bubble').appendChild(progressWrapper);
             chatBox.appendChild(el);
             scrollToBottom();
-
-            const CHUNK_SIZE = 1024 * 512; // 512KB
-            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-            const uploadId = Math.random().toString(36).substr(2, 9);
-
-            for (let i = 0; i < totalChunks; i++) {{
-                const start = i * CHUNK_SIZE;
-                const end = Math.min(file.size, start + CHUNK_SIZE);
-                const chunk = file.slice(start, end);
-
-                const formData = new FormData();
-                formData.append('file', chunk);
-                formData.append('metadata', JSON.stringify({{
-                    upload_id: uploadId,
-                    chunk_index: i,
-                    total_chunks: totalChunks,
-                    file_name: file.name,
-                    sender_id: deviceId,
-                    sender_name: deviceName,
-                    total_size: file.size,
-                    content_type: file.type
-                }}));
-
-                try {{
-                    const res = await fetch('/upload-chunk', {{ method: 'POST', body: formData }});
-                    if (!res.ok) throw new Error('Chunk failed');
-                    
-                    const percent = Math.round(((i + 1) / totalChunks) * 100);
-                    progressWrapper.querySelector('.progress-inner').style.width = percent + '%';
-                    progressWrapper.querySelector('div').innerText = percent + '%';
-                }} catch (e) {{
-                    alert('上传失败：' + file.name);
-                    failed = true;
-                    // 摘掉"待替换"标记，免得它顶掉以后同名文件的气泡
-                    el.dataset.pending = 'false';
-                    const list = pendingUploads.get(file.name) || [];
-                    const idx = list.indexOf(el);
-                    if (idx >= 0) {{ list.splice(idx, 1); }}
-                    if (list.length === 0) pendingUploads.delete(file.name);
-                    break;
+            try {{
+                const CHUNK_SIZE = 1024 * 512;
+                const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+                const uploadId = Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+                const whole = new UploadSHA256(), hashes = [];
+                for(let i=0;i<totalChunks;i++) {{
+                    const bytes=new Uint8Array(await file.slice(i*CHUNK_SIZE,(i+1)*CHUNK_SIZE).arrayBuffer());
+                    whole.update(bytes);
+                    hashes.push(new UploadSHA256().update(bytes).digest());
+                    progressWrapper.querySelector('div').innerText='校验中 '+Math.round((i+1)/totalChunks*100)+'%';
+                    await new Promise(resolve=>setTimeout(resolve,0));
                 }}
+                const fileHash=whole.digest();
+                for(let i=0;i<totalChunks;i++) {{
+                    const formData=new FormData();
+                    formData.append('file',file.slice(i*CHUNK_SIZE,(i+1)*CHUNK_SIZE));
+                    formData.append('metadata',JSON.stringify({{upload_id:uploadId,chunk_index:i,
+                        total_chunks:totalChunks,file_name:file.name,sender_id:deviceId,
+                        sender_name:deviceName,total_size:file.size,content_type:file.type,
+                        chunk_sha256:hashes[i],file_sha256:fileHash}}));
+                    for(let attempt=0;;attempt++) {{
+                        const controller=new AbortController();
+                        const timer=setTimeout(()=>controller.abort(),30000);
+                        try {{
+                            const res=await fetch('/upload-chunk',{{method:'POST',body:formData,signal:controller.signal}});
+                            if(!res.ok) {{
+                                const error=new Error(await res.text());
+                                error.permanent=res.status<500 && ![408,429].includes(res.status);
+                                throw error;
+                            }}
+                            break;
+                        }} catch(error) {{
+                            if(error.permanent || attempt>=3) throw error;
+                            progressWrapper.querySelector('div').innerText='正在重试 '+(attempt+1)+'/3';
+                            await new Promise(resolve=>setTimeout(resolve,500*2**attempt));
+                        }} finally {{ clearTimeout(timer); }}
+                    }}
+                    const percent=Math.round((i+1)/totalChunks*100);
+                    progressWrapper.querySelector('.progress-inner').style.width=percent+'%';
+                    progressWrapper.querySelector('div').innerText=percent+'%';
+                }}
+                const badge=document.createElement('span');badge.style.color='#4caf50';badge.textContent=' ✓';
+                el.querySelector('.bubble').appendChild(badge);
+            }} catch(error) {{
+                el.dataset.pending='false';
+                const list=pendingUploads.get(file.name)||[],idx=list.indexOf(el);
+                if(idx>=0) list.splice(idx,1);
+                if(list.length===0) pendingUploads.delete(file.name);
+                const badge=document.createElement('span');badge.style.color='#e0533d';badge.textContent=' ✗ 上传失败';
+                el.querySelector('.bubble').appendChild(badge);
+                alert('上传失败：'+file.name+'\n'+error.message);
+            }} finally {{
+                progressWrapper.remove();
+                isUploading=false;
             }}
-            
-            progressWrapper.remove();
-            if (failed) {{
-                // 失败就不能还打勾，否则用户以为已经传上去了
-                el.querySelector('.bubble').innerHTML += ' <span style="color:#e0533d">✗ 上传失败</span>';
-            }} else {{
-                el.querySelector('.bubble').innerHTML += ' <span style="color:#4caf50">✓</span>';
-            }}
-            isUploading = false;
         }}
 
         // ===================== 左侧文件区 =====================
