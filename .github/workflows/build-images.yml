@@ -4,9 +4,9 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths-ignore: ['**.md', 'LICENSE']
+    paths-ignore: ['LICENSE']
   pull_request:
-    paths-ignore: ['**.md', 'LICENSE']
+    paths-ignore: ['LICENSE']
   workflow_dispatch:
 
 permissions:
@@ -96,16 +96,15 @@ jobs:
       - name: Container logs
         if: always()
         run: docker logs smoke || true
-      - name: Export image and standalone binary
+      - name: Export tested image for publishing
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
           docker save tiez-share:${{ matrix.arch }} | gzip > dist/tiez-share-${{ matrix.arch }}.tar.gz
-          docker cp smoke:/usr/local/bin/tiez-share dist/tiez-share-${{ matrix.arch }}
           cd dist
           sha256sum * > SHA256SUMS
-      - name: Upload downloads
+      - name: Upload tested image
         uses: actions/upload-artifact@v4
         with:
           name: tiez-share-${{ matrix.arch }}

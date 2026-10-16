@@ -9,8 +9,7 @@ Cargo.lock.bak
 # 本地测试数据
 /data/
 
-# Local binaries, credentials and backups
-/tiez-share-aarch64
+# Credentials and backups
 .env
 .env.*
 !.env.example

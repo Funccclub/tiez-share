@@ -1,6 +1,6 @@
 /* Independent Apple-inspired material. No external assets or runtime dependency.
-   Design references: hwyuanzi/LiquidGlass-UI and rdev/liquid-glass-react.
-   See README for references; this implementation is original. */
+   Design references: https://github.com/hwyuanzi/LiquidGlass-UI
+   and https://github.com/rdev/liquid-glass-react. Original implementation. */
 body.theme-liquid-glass {
     color-scheme: var(--glass-color-scheme);
     background:
