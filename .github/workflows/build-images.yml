@@ -73,6 +73,8 @@ jobs:
           test "$ready" = 1
           node tests/smoke.mjs
           node tests/retention.mjs tiez-share:${{ matrix.arch }}
+          node tests/message-idle.mjs tiez-share:${{ matrix.arch }}
+          node tests/copy-retention.mjs
           node tests/network.mjs tiez-share:${{ matrix.arch }}
       - name: Liquid glass smoke test
         shell: bash

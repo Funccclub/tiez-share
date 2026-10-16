@@ -58,6 +58,7 @@ pub async fn poll_messages(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<Message>> {
+    crate::maintenance::cleanup_messages(&state);
     let last_id = params
         .get("last_id")
         .and_then(|v| v.parse::<u64>().ok())
@@ -166,6 +167,7 @@ fn broadcast_notice(state: &AppState, text: &str) {
         msg_type: "notice".to_string(),
         content: text.to_string(),
         timestamp: now_millis(),
+        last_copied_at: None,
         sender_id: SYSTEM_SENDER_ID.to_string(),
         sender_name: SYSTEM_SENDER_NAME.to_string(),
         file_path: None,
@@ -173,6 +175,29 @@ fn broadcast_notice(state: &AppState, text: &str) {
     if let Ok(json) = serde_json::to_string(&msg) {
         let _ = state.ws_tx.send(json);
     }
+}
+
+/// `POST /messages/{id}/copied`.
+/// Copy activity uses server time and is serialized with retention/history writes.
+pub async fn message_copied(
+    AxumPath(id): AxumPath<u64>,
+    State(state): State<Arc<AppState>>,
+) -> StatusCode {
+    let _history = state.history_ops.lock().unwrap_or_else(|e| e.into_inner());
+    let now = now_millis();
+    let snapshot = {
+        let mut inner = state.lock();
+        let Some(msg) = inner.messages.iter_mut().find(|m| m.id == id) else {
+            return StatusCode::NOT_FOUND;
+        };
+        if crate::maintenance::message_expired(msg, now, state.cfg.message_idle_ttl_secs) {
+            return StatusCode::NOT_FOUND;
+        }
+        msg.last_copied_at = Some(now);
+        inner.messages.clone()
+    };
+    rewrite_history(&state.cfg.history_file, &snapshot);
+    StatusCode::NO_CONTENT
 }
 
 /// `POST /send_text` and `POST /send-text`.
@@ -609,6 +634,7 @@ pub fn append_message(
         msg_type: msg_type.to_string(),
         content: final_content,
         timestamp: now_millis(),
+        last_copied_at: None,
         sender_id: sender_id.to_string(),
         sender_name: sender_name.to_string(),
         file_path,

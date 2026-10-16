@@ -99,6 +99,7 @@ fn load_config() -> Config {
         max_file_bytes: env_parsed("TIEZ_MAX_FILE_BYTES", 2 * 1024 * 1024 * 1024u64),
         max_storage_bytes: env_parsed("TIEZ_MAX_STORAGE_BYTES", 10 * 1024 * 1024 * 1024u64),
         file_ttl_secs: env_parsed("TIEZ_FILE_TTL_SECS", 7 * 86400u64),
+        message_idle_ttl_secs: env_parsed("TIEZ_MESSAGE_IDLE_TTL_SECS", 86400u64),
         upload_ttl_secs: env_parsed("TIEZ_UPLOAD_TTL_SECS", 3600u64).max(1),
         cleanup_interval_secs: env_parsed("TIEZ_CLEANUP_INTERVAL_SECS", 60u64).max(1),
         lan_networks: Arc::new(network::Policy::load().unwrap_or_else(|e| {
@@ -138,8 +139,11 @@ async fn main() {
     }
 
     let history = load_history(&cfg.history_file, cfg.max_history);
-    let next_id = history.iter().map(|m| m.id).max().unwrap_or(0);
+    // Avoid reusing ids after idle cleanup empties the persisted history.
+    let next_id = history.iter().map(|m| m.id).max().unwrap_or(0)
+        .max(store::now_millis().max(0) as u64);
     let history_len = history.len();
+    let managed_files = maintenance::load_index(&cfg.data_dir);
 
     // Rebuild download tokens so links in restored history keep resolving.
     let mut tokens: HashMap<String, String> = HashMap::new();
@@ -148,6 +152,13 @@ async fn main() {
             if std::path::Path::new(path).is_file() {
                 tokens.insert(token_for_path(path), path.clone());
             }
+        }
+    }
+    // Chat retention can remove the last message pointing at a retained upload.
+    // Rebuild its stable link from the file index as well, without requiring /files.
+    for path in managed_files.keys() {
+        if std::path::Path::new(path).is_file() {
+            tokens.insert(token_for_path(path), path.clone());
         }
     }
 
@@ -160,13 +171,14 @@ async fn main() {
             devices: HashMap::new(),
             tokens,
             uploads: HashMap::new(),
-            managed_files: maintenance::load_index(&cfg.data_dir),
+            managed_files,
         }),
         ws_tx,
         file_ops: tokio::sync::Mutex::new(()),
         history_ops: Mutex::new(()),
     });
     println!("[tiez-share] permitted LAN networks: {:?} (plus loopback)", cfg.lan_networks);
+    maintenance::cleanup_messages(&state);
     tokio::spawn(maintenance::run(state.clone()));
 
     let app = Router::new()
@@ -174,6 +186,7 @@ async fn main() {
         .route("/healthz", get(handlers::healthz))
         .route("/ws", get(handlers::ws_handler))
         .route("/poll", get(handlers::poll_messages))
+        .route("/messages/{id}/copied", post(handlers::message_copied))
         .route("/upload", post(handlers::upload))
         .route("/upload_chunk", post(handlers::upload_chunk).layer(DefaultBodyLimit::max(2 * 1024 * 1024)))
         .route("/upload-chunk", post(handlers::upload_chunk).layer(DefaultBodyLimit::max(2 * 1024 * 1024)))
