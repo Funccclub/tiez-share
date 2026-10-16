@@ -4,6 +4,33 @@ use crate::{models::AppState, store::{now_millis, rewrite_history}};
 
 const INDEX: &str = ".tiez-managed.json";
 
+pub fn message_expired(msg: &crate::models::Message, now: i64, ttl_secs: u64) -> bool {
+    ttl_secs > 0 && now.saturating_sub(msg.last_copied_at.unwrap_or(msg.timestamp)).max(0) as u64
+        >= ttl_secs.saturating_mul(1000)
+}
+
+/// Expire chat records only. Uploaded files retain their independent file policy.
+pub fn cleanup_messages(state: &AppState) {
+    let _history = state.history_ops.lock().unwrap_or_else(|e| e.into_inner());
+    let now = now_millis();
+    let (ids, snapshot) = {
+        let mut inner = state.lock();
+        let mut ids = Vec::new();
+        inner.messages.retain(|msg| {
+            if message_expired(msg, now, state.cfg.message_idle_ttl_secs) {
+                ids.push(msg.id);
+                false
+            } else { true }
+        });
+        if ids.is_empty() { return; }
+        (ids, inner.messages.clone())
+    };
+    rewrite_history(&state.cfg.history_file, &snapshot);
+    let _ = state.ws_tx.send(serde_json::json!({
+        "type": "messages_removed", "removed_message_ids": ids
+    }).to_string());
+}
+
 pub fn load_index(dir: &Path) -> HashMap<String, i64> {
     std::fs::read(dir.join(INDEX)).ok().and_then(|v| serde_json::from_slice(&v).ok()).unwrap_or_default()
 }
@@ -73,6 +100,7 @@ pub fn disk_usage(state: &AppState) -> u64 {
 
 // Caller holds file_ops, so uploads, manual deletion and cleanup cannot race.
 pub fn cleanup(state: &AppState, incoming: u64) -> bool {
+    cleanup_messages(state);
     let now = now_millis();
     let expired: Vec<_> = state.lock().uploads.iter().filter(|(_, s)|
         now.saturating_sub(s.updated) as u64 / 1000 >= state.cfg.upload_ttl_secs)
@@ -116,5 +144,34 @@ pub async fn run(state: Arc<AppState>) {
         ticker.tick().await;
         let _guard = state.file_ops.lock().await;
         cleanup(&state, 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Message;
+
+    #[test]
+    fn idle_deadline_uses_last_copy_or_original_timestamp() {
+        let mut msg = Message { timestamp: 1000, ..Message::default() };
+        assert!(!message_expired(&msg, 1000 + 86_400_000 - 1, 86400));
+        assert!(message_expired(&msg, 1000 + 86_400_000, 86400));
+        msg.last_copied_at = Some(2000);
+        assert!(!message_expired(&msg, 1000 + 86_400_000, 86400));
+        assert!(message_expired(&msg, 2000 + 86_400_000, 86400));
+        assert!(!message_expired(&msg, 0, 86400));
+        assert!(!message_expired(&msg, i64::MAX, 0));
+    }
+
+    #[test]
+    fn legacy_and_copied_history_survive_serialization() {
+        let mut msg: Message = serde_json::from_str(r#"{"id":7,"timestamp":1000,"content":"old"}"#).unwrap();
+        assert_eq!(msg.last_copied_at, None);
+        assert!(message_expired(&msg, 86_401_000, 86400));
+        msg.last_copied_at = Some(86_400_000);
+        let restored: Message = serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        assert_eq!(restored.last_copied_at, msg.last_copied_at);
+        assert!(!message_expired(&restored, 86_401_000, 86400));
     }
 }

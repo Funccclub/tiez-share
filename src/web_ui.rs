@@ -1148,6 +1148,30 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
             return content || '';
         }}
 
+        async function reportMessageCopied(id) {{
+            if (!id) return;
+            try {{
+                const res = await fetch(`/messages/${{id}}/copied`, {{ method: 'POST' }});
+                if (res.status === 404) {{
+                    renderedIds.add(Number(id));
+                    const gone = chatBox.querySelector(`.message[data-id="${{id}}"]`);
+                    if (gone) gone.remove();
+                }} else if (!res.ok) {{
+                    renderToast('已复制，但未能更新消息保留时间');
+                }}
+            }} catch (e) {{ renderToast('已复制，但未能更新消息保留时间'); }}
+        }}
+
+        // Keyboard/context-menu copy of selected chat text also renews retention.
+        // The hidden textarea fallback is outside chatBox, so it cannot double report.
+        chatBox.addEventListener('copy', (e) => {{
+            const selection = window.getSelection();
+            if (e.defaultPrevented || !selection || selection.isCollapsed) return;
+            for (const el of chatBox.querySelectorAll('.message[data-id]')) {{
+                if (selection.containsNode(el, true)) reportMessageCopied(el.dataset.id);
+            }}
+        }});
+
         function attachCopyButton(bubble, text) {{
             if (!text) return;
             const btn = document.createElement('button');
@@ -1162,6 +1186,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
                 e.preventDefault();
                 e.stopPropagation();
                 if (await copyToClipboard(text)) {{
+                    await reportMessageCopied(bubble.closest('.message').dataset.id);
                     btn.innerHTML = COPIED_ICON;
                     btn.classList.add('copied');
                     setTimeout(() => {{
@@ -1368,10 +1393,15 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
 
         // 打开页面时补齐历史记录，否则新连上的设备看不到之前的对话
         async function loadHistory() {{
+            const knownId = lastId;
             try {{
                 const res = await fetch('/poll?last_id=0');
                 if (!res.ok) return;
                 const msgs = await res.json();
+                const liveIds = new Set(msgs.map(m => String(m.id)));
+                for (const el of chatBox.querySelectorAll('.message[data-id]')) {{
+                    if (Number(el.dataset.id) <= knownId && !liveIds.has(el.dataset.id)) el.remove();
+                }}
                 for (const m of msgs) renderMessage(m);
             }} catch (e) {{ /* 中继未就绪时忽略，WS 会自行重连 */ }}
         }}
@@ -1384,6 +1414,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
 
             socket.onopen = () => {{
                 socket.send(JSON.stringify({{ type: 'identity', device_id: deviceId, device_name: deviceName }}));
+                loadHistory();
                 console.log('WS Connected');
             }};
 
@@ -1393,14 +1424,15 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
                     updateDeviceRoster(msg.devices || []);
                     return;
                 }}
-                if (msg.type === 'files_changed') {{
+                if (msg.type === 'files_changed' || msg.type === 'messages_removed') {{
                     // 有人上传或删除了文件：同步左侧文件区；
                     // 被删掉的文件，聊天里对应的消息也一起移除
                     for (const id of (msg.removed_message_ids || [])) {{
+                        renderedIds.add(id);
                         const gone = chatBox.querySelector(`.message[data-id="${{id}}"]`);
                         if (gone) gone.remove();
                     }}
-                    loadFiles();
+                    if (msg.type === 'files_changed') loadFiles();
                     return;
                 }}
                 renderMessage(msg);
