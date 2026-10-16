@@ -143,6 +143,7 @@ async fn main() {
     let next_id = history.iter().map(|m| m.id).max().unwrap_or(0)
         .max(store::now_millis().max(0) as u64);
     let history_len = history.len();
+    let managed_files = maintenance::load_index(&cfg.data_dir);
 
     // Rebuild download tokens so links in restored history keep resolving.
     let mut tokens: HashMap<String, String> = HashMap::new();
@@ -151,6 +152,13 @@ async fn main() {
             if std::path::Path::new(path).is_file() {
                 tokens.insert(token_for_path(path), path.clone());
             }
+        }
+    }
+    // Chat retention can remove the last message pointing at a retained upload.
+    // Rebuild its stable link from the file index as well, without requiring /files.
+    for path in managed_files.keys() {
+        if std::path::Path::new(path).is_file() {
+            tokens.insert(token_for_path(path), path.clone());
         }
     }
 
@@ -163,7 +171,7 @@ async fn main() {
             devices: HashMap::new(),
             tokens,
             uploads: HashMap::new(),
-            managed_files: maintenance::load_index(&cfg.data_dir),
+            managed_files,
         }),
         ws_tx,
         file_ops: tokio::sync::Mutex::new(()),
