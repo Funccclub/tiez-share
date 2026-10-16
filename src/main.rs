@@ -4,7 +4,7 @@
 //! out of the Tauri desktop app so it can run as a plain Linux/AArch64 server
 //! (Docker container on an OpenWrt / iStoreOS router).
 //!
-//! Everything is environment driven; see README.md.
+//! Configuration is environment driven; defaults are defined in load_config.
 
 mod handlers;
 mod models;

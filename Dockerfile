@@ -7,12 +7,7 @@
 # 编译过程不做 QEMU 模拟，所以速度接近本地编译；
 # 运行阶段只做文件拷贝（没有 RUN），因此也不需要 QEMU。
 #
-# 需要本地 x86_64 镜像做测试时（例如在 Windows/Mac 上验证功能）：
-#   docker build \
-#     --build-arg MUSL_CROSS_IMAGE=messense/rust-musl-cross:x86_64-musl \
-#     --build-arg RUST_TARGET=x86_64-unknown-linux-musl \
-#     --build-arg RUNTIME_PLATFORM=linux/amd64 \
-#     -t tiez-share:amd64 .
+# GitHub Actions 为 ARM64 / AMD64 分别传入以下构建参数并运行测试。
 
 ARG MUSL_CROSS_IMAGE=messense/rust-musl-cross:aarch64-musl
 ARG RUST_TARGET=aarch64-unknown-linux-musl
