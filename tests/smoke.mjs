@@ -200,7 +200,7 @@ check(
 
 // ------------------------------------------------------------------ 文件上传
 section("[5] 文件上传 / 下载");
-const fname = `smoke-${Date.now()}.bin`;
+const fname = `测试-smoke-${Date.now()}.bin`;
 const upStatus = await upload(fname, PAYLOAD);
 check("POST /upload 成功", upStatus === 200, `status=${upStatus}`);
 
@@ -217,6 +217,7 @@ check("文件消息类型为 file", !!fileMsg && fileMsg.msg_type === "file");
 if (fileMsg) {
   const dl = await download(fileMsg.content);
   check("下载返回 200", dl.status === 200, `status=${dl.status}`);
+  check("下载文件名不含存储前缀", dl.headers.get("content-disposition")?.includes(`filename*=UTF-8''${encodeURIComponent(fname)}`));
   check(
     "下载内容与原文件逐字节一致",
     dl.buf.length === PAYLOAD.length && dl.buf.every((b, i) => b === PAYLOAD[i]),
@@ -275,6 +276,7 @@ check("分片收完后生成文件消息", !!chunkMsg);
 check("最后一片重试不会生成重复消息", afterChunk.filter(m => m.file_path?.includes(chunkName)).length === 1);
 if (chunkMsg) {
   const dl = await download(chunkMsg.content);
+  check("分片下载文件名不含存储前缀", dl.headers.get("content-disposition")?.includes(`filename*=UTF-8''${encodeURIComponent(chunkName)}`));
   check(
     "分片拼出的文件内容正确",
     dl.buf.length === PAYLOAD.length && dl.buf.every((b, i) => b === PAYLOAD[i]),

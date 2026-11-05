@@ -684,16 +684,17 @@ pub async fn handle_file_download(
                 .to_string();
             let is_image = mime.starts_with("image/");
             let is_video = mime.starts_with("video/");
-            let encoded_name = urlencoding::encode(&filename);
+            let filename = crate::store::download_filename(&filename);
+            let encoded_name = urlencoding::encode(filename);
             let disposition = if is_image || is_video {
                 format!(
-                    "inline; filename=\"{}\"; filename*=UTF-8''{}",
-                    filename, encoded_name
+                    "inline; filename=\"download\"; filename*=UTF-8''{}",
+                    encoded_name
                 )
             } else {
                 format!(
-                    "attachment; filename=\"{}\"; filename*=UTF-8''{}",
-                    filename, encoded_name
+                    "attachment; filename=\"download\"; filename*=UTF-8''{}",
+                    encoded_name
                 )
             };
 

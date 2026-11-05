@@ -55,6 +55,37 @@ pub fn sanitize_filename(name: &str) -> String {
     }
 }
 
+/// Recover the original name from the storage names used by current and older uploads.
+pub fn download_filename(name: &str) -> &str {
+    let Some((timestamp, rest)) = name.split_once('_') else { return name };
+    if timestamp.len() < 8 || !timestamp.bytes().all(|b| b.is_ascii_digit()) || rest.is_empty() {
+        return name;
+    }
+    if let Some((suffix, original)) = rest.split_once('_') {
+        if let Some((time, counter)) = suffix.split_once('-') {
+            if time.len() >= 16 && !counter.is_empty() && !original.is_empty()
+                && time.bytes().all(|b| b.is_ascii_hexdigit())
+                && counter.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return original;
+            }
+        }
+    }
+    rest
+}
+
+#[cfg(test)]
+mod filename_tests {
+    use super::download_filename;
+
+    #[test]
+    fn removes_only_the_storage_prefix() {
+        assert_eq!(download_filename("1700000000000_abcdef1234567890-1_报告_2024.pdf"), "报告_2024.pdf");
+        assert_eq!(download_filename("1700000000000_old.txt"), "old.txt");
+        assert_eq!(download_filename("report_2024.pdf"), "report_2024.pdf");
+        assert_eq!(download_filename("1700000000000_"), "1700000000000_");
+    }
+}
+
 /// Keep client ids to a safe character set (they are echoed back to browsers).
 pub fn sanitize_id(id: &str) -> String {
     let cleaned: String = id
