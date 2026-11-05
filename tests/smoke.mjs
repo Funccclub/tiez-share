@@ -114,6 +114,8 @@ for (const size of [0, 1, 55, 56, 63, 64, 65, 1025, 524288]) {
   check(`网页 SHA-256 正确（${size} bytes）`, hash.digest() === createHash('sha256').update(data).digest('hex'));
 }
 check("GET / 返回页面", indexRes.ok && html.includes("<!DOCTYPE html>"));
+const iconRes = await fetch(`${BASE}/favicon.svg`);
+check("浏览器图标可用", html.includes('href="/favicon.svg"') && iconRes.ok && iconRes.headers.get('content-type')?.startsWith('image/svg+xml') && (await iconRes.text()).includes('<svg'));
 check("标题已注入配置项", html.includes("<h1>") && !html.includes("{title}"), "模板占位符没有被替换");
 check("无 Tauri 残留", !html.includes("__TAURI__") && !html.includes("invoke("), "浏览器里 invoke 会直接报错");
 check(

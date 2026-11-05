@@ -183,6 +183,9 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(handlers::index))
+        .route("/favicon.svg", get(|| async {
+            ([(axum::http::header::CONTENT_TYPE, "image/svg+xml")], include_str!("favicon.svg"))
+        }))
         .route("/healthz", get(handlers::healthz))
         .route("/ws", get(handlers::ws_handler))
         .route("/poll", get(handlers::poll_messages))

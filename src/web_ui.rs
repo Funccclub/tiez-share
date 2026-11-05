@@ -380,6 +380,7 @@ pub fn render_index(theme: &str, color_mode: &str, logo_base64: &str, title: &st
 <html lang="zh" data-theme="{theme}">
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
     <title>{title}</title>
     <style>
